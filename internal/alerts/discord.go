@@ -7,8 +7,6 @@ import (
 	"fmt"
 	"net/http"
 	"time"
-
-	"golang.org/x/text/number"
 )
 
 // DiscordSender sends alerts to Discord via webhook
@@ -76,7 +74,7 @@ func (s *DiscordSender) buildEmbed(payload *AlertPayload) map[string]interface{}
 
 	// Build description
 	description := fmt.Sprintf("**$%.2f** on **%s** @ **%.2f**\nWallet age **%dd** (first seen %s)",
-		number.Decimal(payload.NotionalUSD),
+		payload.NotionalUSD,
 		payload.Outcome,
 		payload.Price,
 		payload.WalletAgeDays,
@@ -102,7 +100,7 @@ func (s *DiscordSender) buildEmbed(payload *AlertPayload) map[string]interface{}
 		},
 		{
 			"name":   "Bet Total",
-			"value":  fmt.Sprintf("$%.2f", number.Decimal(payload.NotionalUSD)),
+			"value":  fmt.Sprintf("$%.2f", payload.NotionalUSD),
 			"inline": true,
 		},
 		{
@@ -158,8 +156,9 @@ func (s *DiscordSender) buildEmbed(payload *AlertPayload) map[string]interface{}
 func (s *DiscordSender) formatScoreBreakdown(b *ScoreBreakdown) string {
 	var parts []string
 	
-	parts = append(parts, fmt.Sprintf("Base: %.0f", b.BaseScore))
-	}
+	parts = append(parts, fmt.Sprintf("Base: %.0f", b.BaseScore))	
+	if b.TimeToCloseMultiplier > 1.0 {
+		parts = append(parts, fmt.Sprintf("⏰ Time to close (%.1fh): **%.2fx**", b.HoursToClose, b.TimeToCloseMultiplier))	}
 	if b.WinRateMultiplier > 1.0 {
 		parts = append(parts, fmt.Sprintf("🎯 Win rate (%.0f%%, %d trades): **%.2fx**", b.WinRate*100, b.ResolvedTrades, b.WinRateMultiplier))
 	}

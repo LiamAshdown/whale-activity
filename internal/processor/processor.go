@@ -890,7 +890,7 @@ func (p *Processor) sendAlert(
 		NotionalUSD:       notional,
 		Price:             trade.Price,
 		WalletAgeDays:     walletAgeDays,
-		SuspicionScore:    score,
+		SuspicionScore:    rawScore,
 		TransactionHash:   trade.TransactionHash,
 		TradeTimestampSec: trade.Timestamp,
 	}
