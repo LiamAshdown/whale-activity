@@ -127,7 +127,7 @@ func (s *DiscordSender) buildEmbed(payload *AlertPayload) map[string]interface{}
 
 	// Footer
 	footer := map[string]interface{}{
-		"text": fmt.Sprintf("insiderwatch • %s • %s", payload.Environment, payload.Timestamp.UTC().Format("2006-01-02 15:04:05 UTC")),
+		"text": fmt.Sprintf("Whale Activity • %s • %s", payload.Environment, payload.Timestamp.UTC().Format("2006-01-02 15:04:05 UTC")),
 	}
 
 	embed := map[string]interface{}{
