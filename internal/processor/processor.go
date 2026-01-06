@@ -428,7 +428,7 @@ func (p *Processor) processTrade(ctx context.Context, trade *dataapi.Trade) erro
 	}
 
 	// Check if alert should be triggered
-	if walletAgeDays <= p.cfg.NewWalletDaysMax {
+	// if walletAgeDays <= p.cfg.NewWalletDaysMax {
 		// Build score breakdown for transparency
 		breakdown := &alerts.ScoreBreakdown{
 			BaseScore:                  rawScore,
@@ -581,7 +581,7 @@ func (p *Processor) processTrade(ctx context.Context, trade *dataapi.Trade) erro
 				p.log.WithError(err).Error("Failed to send alert")
 			}
 		// }
-	}
+	// }
 
 	return nil
 }
