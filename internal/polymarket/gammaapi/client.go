@@ -42,7 +42,7 @@ func (c *Client) GetMarketByConditionID(ctx context.Context, conditionID string)
 	}
 
 	q := u.Query()
-	q.Set("condition_ids[]", conditionID)
+	q.Set("condition_ids", conditionID)
 	u.RawQuery = q.Encode()
 
 	req, err := http.NewRequestWithContext(ctx, "GET", u.String(), nil)
