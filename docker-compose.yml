@@ -77,10 +77,12 @@ services:
       # Polling (faster for dev)
       POLL_INTERVAL_SEC: 30
 
+      DISCORD_WEBHOOK_URL: https://discord.com/api/webhooks/1457898819114107021/lbk6_WOvF6rrW8wsT4d0WCoizV1X5KPZ3zFKy6QpRsNvKA-lVTSNKyZXyfhHkB-QNG4u
+
       # Alerts (Using MailHog for testing)
       # ALERT_MODE supports comma-separated values: log, discord, smtp
       # Examples: "log", "discord", "log,discord", "log,discord,smtp"
-      ALERT_MODE: log
+      ALERT_MODE: log,discord
       SMTP_HOST: mailhog
       SMTP_PORT: 1025
       SMTP_USER: ""
@@ -125,9 +127,44 @@ services:
       - insiderwatch
     restart: unless-stopped
 
+  prometheus:
+    image: prom/prometheus:latest
+    container_name: insiderwatch-prometheus
+    ports:
+      - "9090:9090"
+    volumes:
+      - ./prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - prometheus_data:/prometheus
+    command:
+      - "--config.file=/etc/prometheus/prometheus.yml"
+      - "--storage.tsdb.path=/prometheus"
+      - "--web.console.libraries=/usr/share/prometheus/console_libraries"
+      - "--web.console.templates=/usr/share/prometheus/consoles"
+    networks:
+      - insiderwatch
+    restart: unless-stopped
+
+  grafana:
+    image: grafana/grafana:latest
+    container_name: insiderwatch-grafana
+    ports:
+      - "3000:3000"
+    environment:
+      - GF_SECURITY_ADMIN_PASSWORD=admin
+      - GF_USERS_ALLOW_SIGN_UP=false
+    volumes:
+      - grafana_data:/var/lib/grafana
+    depends_on:
+      - prometheus
+    networks:
+      - insiderwatch
+    restart: unless-stopped
+
 networks:
   insiderwatch:
     driver: bridge
 
 volumes:
   mysql_data:
+  prometheus_data:
+  grafana_data:

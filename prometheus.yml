@@ -1,0 +1,11 @@
+global:
+  scrape_interval: 15s
+  evaluation_interval: 15s
+
+scrape_configs:
+  - job_name: 'insiderwatch'
+    static_configs:
+      - targets: ['insiderwatch:8080']
+        labels:
+          service: 'insiderwatch'
+          environment: 'development'
