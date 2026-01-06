@@ -68,6 +68,12 @@ func (s *SMTPSender) buildEmailBody(payload *AlertPayload) string {
 	body += fmt.Sprintf("Address:        %s\n", payload.WalletAddress)
 	body += fmt.Sprintf("Age:            %d days (first seen %s)\n", payload.WalletAgeDays, payload.FirstSeenDate)
 	body += fmt.Sprintf("Suspicion Score: %.2f\n\n", payload.SuspicionScore)
+	
+	// Add score breakdown if available
+	if payload.ScoreBreakdown != nil {
+		body += s.formatScoreBreakdown(payload.ScoreBreakdown)
+	}
+	
 	body += fmt.Sprintf("TRANSACTION\n")
 	body += fmt.Sprintf("─────────────────────────────────────\n")
 	body += fmt.Sprintf("Hash:           %s\n", payload.TransactionHash)
@@ -79,4 +85,48 @@ func (s *SMTPSender) buildEmailBody(payload *AlertPayload) string {
 	body += fmt.Sprintf("it does NOT prove insider trading.\n")
 
 	return body
+}
+
+func (s *SMTPSender) formatScoreBreakdown(b *ScoreBreakdown) string {
+	breakdown := fmt.Sprintf("SCORE CALCULATION\n")
+	breakdown += fmt.Sprintf("─────────────────────────────────────\n")
+	breakdown += fmt.Sprintf("Base Score:     %.0f\n", b.BaseScore)
+	
+	if b.TimeToCloseMultiplier > 1.0 {
+		breakdown += fmt.Sprintf("Time to Close:  %.2fx (%.1f hours)\n", b.TimeToCloseMultiplier, b.HoursToClose)
+	}
+	if b.WinRateMultiplier > 1.0 {
+		breakdown += fmt.Sprintf("Win Rate:       %.2fx (%.0f%%, %d trades)\n", b.WinRateMultiplier, b.WinRate*100, b.ResolvedTrades)
+	}
+	if b.FirstTradeLargeMultiplier > 1.0 {
+		breakdown += fmt.Sprintf("First Large:    %.1fx\n", b.FirstTradeLargeMultiplier)
+	}
+	if b.FlashFundingMultiplier > 1.0 {
+		breakdown += fmt.Sprintf("Flash Funding:  %.1fx (%.1f minutes)\n", b.FlashFundingMultiplier, b.FundingAgeHours*60)
+	}
+	if b.LiquidityMultiplier > 1.0 {
+		breakdown += fmt.Sprintf("Liquidity:      %.2fx (%.1f%% of pool)\n", b.LiquidityMultiplier, b.LiquidityRatio*100)
+	}
+	if b.PriceConfidenceMultiplier > 1.0 {
+		breakdown += fmt.Sprintf("Extreme Price:  %.1fx\n", b.PriceConfidenceMultiplier)
+	}
+	if b.ConcentrationMultiplier > 1.0 {
+		breakdown += fmt.Sprintf("Concentration:  %.1fx (%.0f%% one-sided)\n", b.ConcentrationMultiplier, b.NetConcentration*100)
+	}
+	if b.VelocityMultiplier > 1.0 {
+		breakdown += fmt.Sprintf("Velocity:       %.1fx (%d trades)\n", b.VelocityMultiplier, b.VelocityCount)
+	}
+	if b.ClusterMultiplier > 1.0 {
+		breakdown += fmt.Sprintf("Cluster:        %.1fx\n", b.ClusterMultiplier)
+	}
+	if b.CoordinatedMultiplier > 1.0 {
+		breakdown += fmt.Sprintf("Coordinated:    %.1fx\n", b.CoordinatedMultiplier)
+	}
+	if b.FundingAgeMultiplier > 1.0 {
+		breakdown += fmt.Sprintf("Fast Funding:   %.2fx (%.1f hours)\n", b.FundingAgeMultiplier, b.FundingAgeHours)
+	}
+	
+	breakdown += fmt.Sprintf("\nFinal Score:    %.0f\n\n", b.FinalScore)
+	
+	return breakdown
 }

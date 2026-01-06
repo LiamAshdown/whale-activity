@@ -429,12 +429,45 @@ func (p *Processor) processTrade(ctx context.Context, trade *dataapi.Trade) erro
 
 	// Check if alert should be triggered
 	if walletAgeDays <= p.cfg.NewWalletDaysMax {
+		// Build score breakdown for transparency
+		breakdown := &alerts.ScoreBreakdown{
+			BaseScore:                  score,
+			TimeToCloseMultiplier:      1.0,
+			WinRateMultiplier:          1.0,
+			FirstTradeLargeMultiplier:  firstTradeLargeMultiplier,
+			FlashFundingMultiplier:     flashFundingMultiplier,
+			LiquidityMultiplier:        liquidityMultiplier,
+			PriceConfidenceMultiplier:  priceConfidenceMultiplier,
+			ConcentrationMultiplier:    concentrationMultiplier,
+			VelocityMultiplier:         velocityMultiplier,
+			ClusterMultiplier:          clusterMultiplier,
+			CoordinatedMultiplier:      1.0,
+			FundingAgeMultiplier:       1.0,
+			WinRate:                    winRate,
+			ResolvedTrades:             0,
+			FundingAgeHours:            fundingAgeHours,
+			HoursToClose:               hoursToClose,
+			LiquidityRatio:             0,
+			NetConcentration:           netPosConcentration,
+			VelocityCount:              velocityCount,
+			ClusterID:                  clusterID,
+			IsCoordinated:              isCoordinated,
+		}
+		
+		if walletStats != nil {
+			breakdown.ResolvedTrades = walletStats.TotalResolvedTrades
+		}
+		if marketInfo != nil && marketInfo.LiquidityNum > 0 {
+			breakdown.LiquidityRatio = notional / marketInfo.LiquidityNum
+		}
+
 		// Apply win rate multiplier to severity determination
 		adjustedScore := score
 		// Only apply win rate multiplier if wallet has sufficient sample size (5+ resolved trades)
 		if walletStats != nil && walletStats.TotalResolvedTrades >= 5 && winRate >= p.cfg.MinWinRateThreshold {
 			// High win rate increases suspicion
-			adjustedScore *= (1.0 + winRate)
+			breakdown.WinRateMultiplier = 1.0 + winRate
+			adjustedScore *= breakdown.WinRateMultiplier
 			p.log.WithFields(logrus.Fields{
 				"wallet":         wallet.WalletAddress,
 				"win_rate":       winRate,
@@ -510,6 +543,7 @@ func (p *Processor) processTrade(ctx context.Context, trade *dataapi.Trade) erro
 
 		// Extra boost if coordinated trade detected
 		if isCoordinated {
+			breakdown.CoordinatedMultiplier = 2.0
 			adjustedScore *= 2.0
 			p.log.WithFields(logrus.Fields{
 				"wallet":     wallet.WalletAddress,
@@ -524,18 +558,20 @@ func (p *Processor) processTrade(ctx context.Context, trade *dataapi.Trade) erro
 		// Suspicious if first trade within 24 hours of receiving funds
 		if fundingAgeHours > 0 && fundingAgeHours <= 24 {
 			// 1 hour = 2.5x, 12 hours = 1.5x, 24 hours = 1.0x
-			fundingMultiplier := 1.0 + (24.0-fundingAgeHours)/24.0*1.5
-			adjustedScore *= fundingMultiplier
+			breakdown.FundingAgeMultiplier = 1.0 + (24.0-fundingAgeHours)/24.0*1.5
+			adjustedScore *= breakdown.FundingAgeMultiplier
 			p.log.WithFields(logrus.Fields{
 				"wallet":             wallet.WalletAddress,
 				"funding_age_hours": fundingAgeHours,
-				"multiplier":        fundingMultiplier,
+				"multiplier":        breakdown.FundingAgeMultiplier,
 			}).Debug("Applied funding age multiplier")
 		}
+		
+		breakdown.FinalScore = adjustedScore
 
 		severity := p.determineSeverity(adjustedScore)
 		if severity != alerts.SeverityInfo {
-			if err := p.sendAlert(ctx, trade, wallet, marketInfo, notional, walletAgeDays, adjustedScore, severity); err != nil {
+			if err := p.sendAlert(ctx, trade, wallet, marketInfo, notional, walletAgeDays, adjustedScore, severity, breakdown); err != nil {
 				p.log.WithError(err).Error("Failed to send alert")
 			}
 		}
@@ -792,6 +828,7 @@ func (p *Processor) sendAlert(
 	walletAgeDays int,
 	score float64,
 	severity alerts.Severity,
+	breakdown *alerts.ScoreBreakdown,
 ) error {
 	// Check cooldown
 	lastAlert, err := p.db.GetLastAlertForWallet(ctx, wallet.WalletAddress)
@@ -844,6 +881,7 @@ func (p *Processor) sendAlert(
 		WalletAgeDays:   walletAgeDays,
 		FirstSeenDate:   time.Unix(wallet.FirstSeenTS, 0).Format("2006-01-02"),
 		SuspicionScore:  score,
+		ScoreBreakdown:  breakdown,
 		TransactionHash: trade.TransactionHash,
 		TxHashShort:     shortenHash(trade.TransactionHash),
 		Timestamp:       time.Unix(trade.Timestamp, 0),

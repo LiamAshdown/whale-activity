@@ -125,6 +125,16 @@ func (s *DiscordSender) buildEmbed(payload *AlertPayload) map[string]interface{}
 		},
 	}
 
+	// Add score breakdown if available
+	if payload.ScoreBreakdown != nil {
+		breakdownText := s.formatScoreBreakdown(payload.ScoreBreakdown)
+		fields = append(fields, map[string]interface{}{
+			"name":   "📊 Score Calculation",
+			"value":  breakdownText,
+			"inline": false,
+		})
+	}
+
 	// Footer
 	footer := map[string]interface{}{
 		"text": fmt.Sprintf("Whale Activity • %s • %s", payload.Environment, payload.Timestamp.UTC().Format("2006-01-02 15:04:05 UTC")),
@@ -141,6 +151,63 @@ func (s *DiscordSender) buildEmbed(payload *AlertPayload) map[string]interface{}
 	}
 
 	return embed
+}
+
+func (s *DiscordSender) formatScoreBreakdown(b *ScoreBreakdown) string {
+	var parts []string
+	
+	parts = append(parts, fmt.Sprintf("Base Score: **%.0f**", b.BaseScore))
+	
+	if b.TimeToCloseMultiplier > 1.0 {
+		parts = append(parts, fmt.Sprintf("⏰ Time to close (%.1fh): **%.2fx**", b.HoursToClose, b.TimeToCloseMultiplier))
+	}
+	if b.WinRateMultiplier > 1.0 {
+		parts = append(parts, fmt.Sprintf("🎯 Win rate (%.0f%%, %d trades): **%.2fx**", b.WinRate*100, b.ResolvedTrades, b.WinRateMultiplier))
+	}
+	if b.FirstTradeLargeMultiplier > 1.0 {
+		parts = append(parts, fmt.Sprintf("🆕 First large trade: **%.1fx**", b.FirstTradeLargeMultiplier))
+	}
+	if b.FlashFundingMultiplier > 1.0 {
+		parts = append(parts, fmt.Sprintf("⚡ Flash funding (%.1fm): **%.1fx**", b.FundingAgeHours*60, b.FlashFundingMultiplier))
+	}
+	if b.LiquidityMultiplier > 1.0 {
+		parts = append(parts, fmt.Sprintf("💧 Liquidity ratio (%.1f%%): **%.2fx**", b.LiquidityRatio*100, b.LiquidityMultiplier))
+	}
+	if b.PriceConfidenceMultiplier > 1.0 {
+		parts = append(parts, fmt.Sprintf("💪 Extreme price: **%.1fx**", b.PriceConfidenceMultiplier))
+	}
+	if b.ConcentrationMultiplier > 1.0 {
+		parts = append(parts, fmt.Sprintf("📈 One-sided (%.0f%%): **%.1fx**", b.NetConcentration*100, b.ConcentrationMultiplier))
+	}
+	if b.VelocityMultiplier > 1.0 {
+		parts = append(parts, fmt.Sprintf("🚀 Velocity (%d trades): **%.1fx**", b.VelocityCount, b.VelocityMultiplier))
+	}
+	if b.ClusterMultiplier > 1.0 {
+		parts = append(parts, fmt.Sprintf("👥 Cluster: **%.1fx**", b.ClusterMultiplier))
+	}
+	if b.CoordinatedMultiplier > 1.0 {
+		parts = append(parts, fmt.Sprintf("🤝 Coordinated: **%.1fx**", b.CoordinatedMultiplier))
+	}
+	if b.FundingAgeMultiplier > 1.0 {
+		parts = append(parts, fmt.Sprintf("⏱️ Fast funding (%.1fh): **%.2fx**", b.FundingAgeHours, b.FundingAgeMultiplier))
+	}
+	
+	if len(parts) > 1 {
+		parts = append(parts, fmt.Sprintf("\n**Final Score: %.0f**", b.FinalScore))
+	}
+	
+	return fmt.Sprintf("```\n%s\n```", truncate(joinParts(parts), 1000))
+}
+
+func joinParts(parts []string) string {
+	result := ""
+	for i, p := range parts {
+		if i > 0 {
+			result += "\n"
+		}
+		result += p
+	}
+	return result
 }
 
 func truncate(s string, maxLen int) string {
