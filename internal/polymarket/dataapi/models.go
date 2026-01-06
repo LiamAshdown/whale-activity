@@ -41,3 +41,18 @@ type ErrorResponse struct {
 	Error   string `json:"error"`
 	Message string `json:"message"`
 }
+
+// TradeParams holds parameters for fetching trades
+type TradeParams struct {
+	Limit          int
+	Offset         int
+	TakerOnly      bool
+	FilterType     string
+	FilterAmount   float64
+	Market         string
+	EventID        string
+	User           string
+	Side           string
+	SortBy         string // e.g., "timestamp"
+	SortDirection  string // "ASC" or "DESC"
+}

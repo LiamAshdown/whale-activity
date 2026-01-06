@@ -80,6 +80,12 @@ func (c *Client) GetTrades(ctx context.Context, params TradeParams) (*TradesResp
 	if params.Side != "" {
 		q.Set("side", params.Side)
 	}
+	if params.SortBy != "" {
+		q.Set("sortBy", params.SortBy)
+	}
+	if params.SortDirection != "" {
+		q.Set("sortDirection", params.SortDirection)
+	}
 	u.RawQuery = q.Encode()
 
 	req, err := http.NewRequestWithContext(ctx, "GET", u.String(), nil)
@@ -181,17 +187,4 @@ func (c *Client) setAuthHeaders(req *http.Request) {
 	for k, v := range c.extraHeaders {
 		req.Header.Set(k, v)
 	}
-}
-
-// TradeParams holds parameters for the GetTrades call
-type TradeParams struct {
-	Limit        int
-	Offset       int
-	TakerOnly    bool
-	FilterType   string  // CASH
-	FilterAmount float64 // BIG_TRADE_USD
-	Market       string
-	EventID      string
-	User         string
-	Side         string // BUY, SELL
 }

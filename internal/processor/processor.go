@@ -67,12 +67,14 @@ func (p *Processor) ProcessTrades(ctx context.Context) error {
 		lastProcessedTS, _ = strconv.ParseInt(lastProcessedStr, 10, 64)
 	}
 
-	// Fetch trades with BIG_TRADE_USD filter
+	// Fetch trades with BIG_TRADE_USD filter (sorted by timestamp DESC for recent-first)
 	params := dataapi.TradeParams{
-		Limit:        100,
-		TakerOnly:    true,
-		FilterType:   "CASH",
-		FilterAmount: p.cfg.BigTradeUSD,
+		Limit:         100,
+		TakerOnly:     true,
+		FilterType:    "CASH",
+		FilterAmount:  p.cfg.BigTradeUSD,
+		SortBy:        "timestamp",
+		SortDirection: "DESC",
 	}
 
 	resp, err := p.dataClient.GetTrades(ctx, params)
@@ -146,6 +148,35 @@ func (p *Processor) processTrade(ctx context.Context, trade *dataapi.Trade) erro
 		return nil // Already processed
 	}
 
+	// Resolve market info FIRST to check if we should process this trade at all
+	marketInfo, err := p.resolveMarket(ctx, trade)
+	if err != nil {
+		p.log.WithError(err).WithField("condition_id", trade.ConditionID).Warn("Failed to resolve market")
+	}
+
+	// Skip markets that can't involve insider trading (sports, entertainment, etc.)
+	if marketInfo != nil && isNotInsiderCategory(marketInfo.Category) {
+		metrics.TradesProcessed.WithLabelValues("filtered_sports").Inc()
+		p.log.WithFields(logrus.Fields{
+			"category":     marketInfo.Category,
+			"condition_id": trade.ConditionID,
+			"title":        marketInfo.Title,
+		}).Debug("Skipping sports/entertainment market")
+		return nil
+	}
+
+	// Skip trades for markets that have already ended/resolved
+	if marketInfo != nil && marketInfo.EndDate > 0 && trade.Timestamp > marketInfo.EndDate {
+		metrics.TradesProcessed.WithLabelValues("filtered_closed").Inc()
+		p.log.WithFields(logrus.Fields{
+			"condition_id": trade.ConditionID,
+			"title":        marketInfo.Title,
+			"trade_time":   trade.Timestamp,
+			"end_date":     marketInfo.EndDate,
+		}).Debug("Skipping trade for closed market")
+		return nil
+	}
+
 	// Calculate notional
 	notional := p.calculateNotional(trade)
 
@@ -163,22 +194,6 @@ func (p *Processor) processTrade(ctx context.Context, trade *dataapi.Trade) erro
 
 	// Calculate wallet age in days
 	walletAgeDays := int((trade.Timestamp - wallet.FirstSeenTS) / 86400)
-
-	// Resolve market info
-	marketInfo, err := p.resolveMarket(ctx, trade)
-	if err != nil {
-		p.log.WithError(err).WithField("condition_id", trade.ConditionID).Warn("Failed to resolve market")
-	}
-
-	// Skip markets that can't involve insider trading (sports, entertainment, etc.)
-	if marketInfo != nil && isNotInsiderCategory(marketInfo.Category) {
-		p.log.WithFields(logrus.Fields{
-			"category":     marketInfo.Category,
-			"condition_id": trade.ConditionID,
-			"title":        marketInfo.Title,
-		}).Debug("Skipping non-insider tradeable market")
-		return nil
-	}
 
 	// Calculate time to market close (hours)
 	var hoursToClose float64
@@ -329,52 +344,52 @@ func (p *Processor) resolveMarket(ctx context.Context, trade *dataapi.Trade) (*M
 
 	// Resolve via Gamma API or trade data
 	var marketURL, marketTitle, marketSlug string
-
 	var category string
-	if trade.Slug != "" {
-		marketSlug = trade.Slug
-		marketTitle = trade.Title
-		marketURL = fmt.Sprintf("https://polymarket.com/market/%s", trade.Slug)
-		// No category available from trade data
-	} else {
-		// Query Gamma API
-		market, err := p.gammaClient.GetMarketByConditionID(ctx, trade.ConditionID)
-		if err != nil {
-			// Fallback
+	var endDate int64
+
+	// Always try to get market info from Gamma API for category data
+	market, err := p.gammaClient.GetMarketByConditionID(ctx, trade.ConditionID)
+	if err != nil {
+		// Fallback to trade data if Gamma API fails
+		if trade.Slug != "" {
+			marketSlug = trade.Slug
+			marketTitle = trade.Title
+			marketURL = fmt.Sprintf("https://polymarket.com/market/%s", trade.Slug)
+			// No category available - cannot filter sports
+		} else {
 			marketURL = fmt.Sprintf("https://polymarket.com/search?q=%s", trade.ConditionID)
 			marketTitle = trade.Title
 			marketSlug = ""
-		} else {
-			marketSlug = market.Slug
-			marketTitle = market.Question
-			marketURL = fmt.Sprintf("https://polymarket.com/market/%s", market.Slug)
-			category = market.Category
+		}
+	} else {
+		marketSlug = market.Slug
+		marketTitle = market.Question
+		marketURL = fmt.Sprintf("https://polymarket.com/market/%s", market.Slug)
+		category = market.Category
 
-			// Parse EndDate if present
-			var endDate int64
-			if market.EndDate != "" {
-				endTime, err := time.Parse(time.RFC3339, market.EndDate)
-				if err == nil {
-					endDate = endTime.Unix()
-				}
+		// Parse EndDate if present
+		if market.EndDate != "" {
+			endTime, err := time.Parse(time.RFC3339, market.EndDate)
+			if err == nil {
+				endDate = endTime.Unix()
 			}
+		}
 
-			// Cache it
-			mapRecord := &storage.MarketMap{
-				ConditionID:  trade.ConditionID,
-				MarketSlug:   market.Slug,
-				MarketTitle:  market.Question,
-				MarketURL:    marketURL,
-				Category:     market.Category,
-				EndDate:      endDate,
-				VolumeNum:    market.VolumeNum,
-				LiquidityNum: market.LiquidityNum,
-				IsActive:     market.Active,
-				UpdatedTS:    time.Now().Unix(),
-			}
-			if err := p.db.UpsertMarketMap(ctx, mapRecord); err != nil {
-				p.log.WithError(err).Error("Failed to cache market map")
-			}
+		// Cache it
+		mapRecord := &storage.MarketMap{
+			ConditionID:  trade.ConditionID,
+			MarketSlug:   market.Slug,
+			MarketTitle:  market.Question,
+			MarketURL:    marketURL,
+			Category:     market.Category,
+			EndDate:      endDate,
+			VolumeNum:    market.VolumeNum,
+			LiquidityNum: market.LiquidityNum,
+			IsActive:     market.Active,
+			UpdatedTS:    time.Now().Unix(),
+		}
+		if err := p.db.UpsertMarketMap(ctx, mapRecord); err != nil {
+			p.log.WithError(err).Error("Failed to cache market map")
 		}
 	}
 
@@ -383,7 +398,7 @@ func (p *Processor) resolveMarket(ctx context.Context, trade *dataapi.Trade) (*M
 		Slug:     marketSlug,
 		URL:      marketURL,
 		Category: category,
-		EndDate:  0, // Only available from Gamma API cache
+		EndDate:  endDate,
 	}, nil
 }
 
