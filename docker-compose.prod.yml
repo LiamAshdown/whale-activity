@@ -1,0 +1,130 @@
+version: "3.8"
+
+services:
+  mysql:
+    image: mysql:8.0
+    container_name: insiderwatch-mysql
+    environment:
+      MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD:-rootpassword}
+      MYSQL_DATABASE: insiderwatch
+      MYSQL_USER: insiderwatch
+      MYSQL_PASSWORD: ${MYSQL_PASSWORD:-insiderwatch}
+    ports:
+      - "3307:3306"
+    volumes:
+      - mysql_data:/var/lib/mysql
+      - ./migrations:/docker-entrypoint-initdb.d:ro
+    networks:
+      - insiderwatch
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "mysqladmin",
+          "ping",
+          "-h",
+          "localhost",
+          "-u",
+          "root",
+          "-p${MYSQL_ROOT_PASSWORD:-rootpassword}",
+        ]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+
+  insiderwatch:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: insiderwatch-app
+    environment:
+      # Environment
+      ENVIRONMENT: production
+
+      # Database
+      DATABASE_DSN: insiderwatch:${MYSQL_PASSWORD:-insiderwatch}@tcp(mysql:3306)/insiderwatch?parseTime=true
+      DATABASE_MAX_CONNS: 25
+      DATABASE_MAX_IDLE_TIME_MINS: 5
+
+      # Data API
+      DATA_API_BASE_URL: https://data-api.polymarket.com
+      DATA_API_AUTH_MODE: ${DATA_API_AUTH_MODE:-none}
+      # Set these via environment variables or Docker secrets:
+      # DATA_API_BEARER_TOKEN: ${DATA_API_BEARER_TOKEN}
+      # DATA_API_API_KEY: ${DATA_API_API_KEY}
+      DATA_API_EXTRA_HEADERS: ${DATA_API_EXTRA_HEADERS:-"{}"}
+
+      # Gamma API
+      GAMMA_API_BASE_URL: https://gamma-api.polymarket.com
+
+      # Detection thresholds (Production values)
+      BIG_TRADE_USD: 10000
+      MIN_TRADE_USD: 5000
+      NEW_WALLET_DAYS_MAX: 7
+      SUSPICION_SCORE_WARN: 10000
+      SUSPICION_SCORE_ALERT: 25000
+      NET_POSITION_WINDOW_HRS: 24
+      ALERT_COOLDOWN_MINS: 60
+      TIME_TO_CLOSE_HOURS_MAX: 48
+      MIN_WIN_RATE_THRESHOLD: 0.75
+
+      # Rate limits
+      DATA_API_TRADES_RPS: 2.0
+      DATA_API_ACTIVITY_RPS: 1.0
+      GAMMA_API_MARKETS_RPS: 5.0
+
+      # Worker pool
+      WALLET_LOOKUP_WORKERS: 5
+
+      # Polling
+      POLL_INTERVAL_SEC: 30
+
+      # Alerts - CONFIGURE THESE FOR PRODUCTION
+      # ALERT_MODE supports comma-separated values: log, discord, smtp
+      # Examples: "log", "discord", "log,discord", "log,discord,smtp"
+      ALERT_MODE: ${ALERT_MODE:-log}
+
+      # Discord (set via environment variable)
+      DISCORD_WEBHOOK_URL: ${DISCORD_WEBHOOK_URL}
+
+      # SMTP (set via environment variables)
+      SMTP_HOST: ${SMTP_HOST:-""}
+      SMTP_PORT: ${SMTP_PORT:-587}
+      SMTP_USER: ${SMTP_USER:-""}
+      # SMTP_PASSWORD: ${SMTP_PASSWORD}
+      SMTP_FROM: ${SMTP_FROM:-insiderwatch@example.com}
+      SMTP_TO: ${SMTP_TO:-alerts@example.com}
+
+      # Monitoring
+      HEALTH_PORT: 8080
+      METRICS_PORT: 9090
+    ports:
+      - "8080:8080"
+    depends_on:
+      mysql:
+        condition: service_healthy
+    networks:
+      - insiderwatch
+    restart: unless-stopped
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "wget",
+          "--no-verbose",
+          "--tries=1",
+          "--spider",
+          "http://localhost:8080/health",
+        ]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 10s
+
+networks:
+  insiderwatch:
+    driver: bridge
+
+volumes:
+  mysql_data:

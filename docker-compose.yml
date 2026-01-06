@@ -1,0 +1,133 @@
+version: "3.8"
+
+services:
+  mysql:
+    image: mysql:8.0
+    container_name: insiderwatch-mysql
+    environment:
+      MYSQL_ROOT_PASSWORD: rootpassword
+      MYSQL_DATABASE: insiderwatch
+      MYSQL_USER: insiderwatch
+      MYSQL_PASSWORD: insiderwatch
+    ports:
+      - "3307:3306"
+    volumes:
+      - mysql_data:/var/lib/mysql
+      - ./migrations:/docker-entrypoint-initdb.d:ro
+    networks:
+      - insiderwatch
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "mysqladmin",
+          "ping",
+          "-h",
+          "localhost",
+          "-u",
+          "root",
+          "-prootpassword",
+        ]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+
+  insiderwatch:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: insiderwatch-app
+    environment:
+      # Environment
+      ENVIRONMENT: development
+
+      # Database
+      DATABASE_DSN: insiderwatch:insiderwatch@tcp(mysql:3306)/insiderwatch?parseTime=true
+      DATABASE_MAX_CONNS: 10
+      DATABASE_MAX_IDLE_TIME_MINS: 5
+
+      # Data API
+      DATA_API_BASE_URL: https://data-api.polymarket.com
+      DATA_API_AUTH_MODE: none
+      DATA_API_EXTRA_HEADERS: "{}"
+
+      # Gamma API
+      GAMMA_API_BASE_URL: https://gamma-api.polymarket.com
+
+      # Detection thresholds (Lower for dev/testing)
+      BIG_TRADE_USD: 5000
+      MIN_TRADE_USD: 1000
+      NEW_WALLET_DAYS_MAX: 30
+      SUSPICION_SCORE_WARN: 1000
+      SUSPICION_SCORE_ALERT: 5000
+      NET_POSITION_WINDOW_HRS: 24
+      ALERT_COOLDOWN_MINS: 5
+      TIME_TO_CLOSE_HOURS_MAX: 48
+      MIN_WIN_RATE_THRESHOLD: 0.75
+
+      # Rate limits
+      DATA_API_TRADES_RPS: 2.0
+      DATA_API_ACTIVITY_RPS: 1.0
+      GAMMA_API_MARKETS_RPS: 5.0
+
+      # Worker pool
+      WALLET_LOOKUP_WORKERS: 3
+
+      # Polling (faster for dev)
+      POLL_INTERVAL_SEC: 30
+
+      # Alerts (Using MailHog for testing)
+      # ALERT_MODE supports comma-separated values: log, discord, smtp
+      # Examples: "log", "discord", "log,discord", "log,discord,smtp"
+      ALERT_MODE: log
+      SMTP_HOST: mailhog
+      SMTP_PORT: 1025
+      SMTP_USER: ""
+      SMTP_PASSWORD: ""
+      SMTP_FROM: dev@insiderwatch.local
+      SMTP_TO: alerts@insiderwatch.local
+
+      # Monitoring
+      HEALTH_PORT: 8080
+      METRICS_PORT: 9090
+    ports:
+      - "8080:8080"
+      - "9090:9090"
+    depends_on:
+      mysql:
+        condition: service_healthy
+    networks:
+      - insiderwatch
+    restart: unless-stopped
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "wget",
+          "--no-verbose",
+          "--tries=1",
+          "--spider",
+          "http://localhost:8080/health",
+        ]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 10s
+
+  mailhog:
+    image: mailhog/mailhog:latest
+    container_name: insiderwatch-mailhog
+    ports:
+      - "1025:1025" # SMTP
+      - "8025:8025" # Web UI
+    networks:
+      - insiderwatch
+    restart: unless-stopped
+
+networks:
+  insiderwatch:
+    driver: bridge
+
+volumes:
+  mysql_data:

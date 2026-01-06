@@ -1,0 +1,4 @@
+# Add .env to gitignore (contains secrets)
+.env
+.env.local
+.env.*.local
