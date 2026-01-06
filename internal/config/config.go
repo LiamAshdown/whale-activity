@@ -91,7 +91,7 @@ func Load() (*Config, error) {
 		GammaAPIBaseURL:      getEnv("GAMMA_API_BASE_URL", "https://gamma-api.polymarket.com"),
 		BigTradeUSD:          getEnvFloat("BIG_TRADE_USD", 10000.0),
 		MinTradeUSD:          getEnvFloat("MIN_TRADE_USD", 5000.0),
-		NewWalletDaysMax:     getEnvInt("NEW_WALLET_DAYS_MAX", 7),
+		NewWalletDaysMax:     getEnvInt("NEW_WALLET_DAYS_MAX", 30),
 		SuspicionScoreWarn:   getEnvFloat("SUSPICION_SCORE_WARN", 5000.0),
 		SuspicionScoreAlert:  getEnvFloat("SUSPICION_SCORE_ALERT", 10000.0),
 		NetPositionWindowHrs: getEnvInt("NET_POSITION_WINDOW_HRS", 24),

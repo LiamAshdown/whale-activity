@@ -166,7 +166,8 @@ func (p *Processor) processTrade(ctx context.Context, trade *dataapi.Trade) erro
 	}
 
 	// Skip trades for markets that have already ended/resolved
-	if marketInfo != nil && marketInfo.EndDate > 0 && trade.Timestamp > marketInfo.EndDate {
+	// And market ending needs to be within 2 months from now
+	if marketInfo != nil && marketInfo.EndDate > 0 && (trade.Timestamp > marketInfo.EndDate || marketInfo.EndDate >= time.Now().AddDate(0, 2, 0).Unix()) {
 		metrics.TradesProcessed.WithLabelValues("filtered_closed").Inc()
 		p.log.WithFields(logrus.Fields{
 			"condition_id": trade.ConditionID,
