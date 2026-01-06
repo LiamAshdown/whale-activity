@@ -29,6 +29,7 @@ type Processor struct {
 	alertSender alerts.Sender
 	workerPool  chan struct{}
 	log         *logrus.Logger
+	walletLocks sync.Map // Per-wallet locks to prevent duplicate API calls
 }
 
 // New creates a new processor
@@ -154,6 +155,7 @@ func (p *Processor) processTrade(ctx context.Context, trade *dataapi.Trade) erro
 	marketInfo, err := p.resolveMarket(ctx, trade)
 	if err != nil {
 		p.log.WithError(err).WithField("condition_id", trade.ConditionID).Warn("Failed to resolve market")
+		metrics.TradesProcessed.WithLabelValues("market_resolve_error").Inc()
 	}
 
 	// Skip markets that can't involve insider trading (sports, entertainment, etc.)
@@ -170,7 +172,7 @@ func (p *Processor) processTrade(ctx context.Context, trade *dataapi.Trade) erro
 	// Skip trades for markets that have already ended/resolved
 	// Or markets ending more than 2 months from now (too far in future)
 	twoMonthsFromNow := time.Now().AddDate(0, 2, 0).Unix()
-	if marketInfo != nil && marketInfo.EndDate > 0 && (trade.Timestamp > marketInfo.EndDate || marketInfo.EndDate > twoMonthsFromNow) {
+	if marketInfo != nil && marketInfo.EndDate > 0 && (trade.Timestamp >= marketInfo.EndDate || marketInfo.EndDate > twoMonthsFromNow) {
 		metrics.TradesProcessed.WithLabelValues("filtered_closed").Inc()
 		p.log.WithFields(logrus.Fields{
 			"condition_id": trade.ConditionID,
@@ -178,6 +180,18 @@ func (p *Processor) processTrade(ctx context.Context, trade *dataapi.Trade) erro
 			"trade_time":   trade.Timestamp,
 			"end_date":     marketInfo.EndDate,
 		}).Debug("Skipping trade for closed or distant market")
+		return nil
+	}
+
+	// Validate trade data
+	if trade.Side != "BUY" && trade.Side != "SELL" {
+		p.log.WithField("side", trade.Side).Warn("Invalid trade side, skipping")
+		metrics.TradesProcessed.WithLabelValues("invalid_side").Inc()
+		return nil
+	}
+	if trade.Outcome == "" {
+		p.log.Warn("Missing trade outcome, skipping")
+		metrics.TradesProcessed.WithLabelValues("missing_outcome").Inc()
 		return nil
 	}
 
@@ -193,8 +207,12 @@ func (p *Processor) processTrade(ctx context.Context, trade *dataapi.Trade) erro
 	// Get or create wallet record
 	wallet, err := p.getOrCreateWallet(ctx, trade.ProxyWallet, trade.Timestamp)
 	if err != nil {
+		metrics.TradesProcessed.WithLabelValues("wallet_lookup_error").Inc()
 		return fmt.Errorf("get wallet: %w", err)
 	}
+
+	// Capture pre-update state for first-trade detection (prevent race conditions)
+	isFirstTrade := wallet.TotalTrades == 0
 
 	// Calculate wallet age in days
 	walletAgeDays := int((trade.Timestamp - wallet.FirstSeenTS) / 86400)
@@ -221,6 +239,7 @@ func (p *Processor) processTrade(ctx context.Context, trade *dataapi.Trade) erro
 		Price:           trade.Price,
 	}
 	if err := p.db.InsertTrade(ctx, tradeRecord); err != nil {
+		metrics.TradesProcessed.WithLabelValues("insert_error").Inc()
 		return fmt.Errorf("insert trade: %w", err)
 	}
 
@@ -231,11 +250,13 @@ func (p *Processor) processTrade(ctx context.Context, trade *dataapi.Trade) erro
 	wallet.UpdatedTS = time.Now().Unix()
 	if err := p.db.UpsertWallet(ctx, wallet); err != nil {
 		p.log.WithError(err).Error("Failed to update wallet stats")
+		metrics.TradesProcessed.WithLabelValues("wallet_update_error").Inc()
 	}
 
 	// Update net position
 	if err := p.updateNetPosition(ctx, trade, notional); err != nil {
 		p.log.WithError(err).Error("Failed to update net position")
+		metrics.TradesProcessed.WithLabelValues("net_position_error").Inc()
 	}
 
 	// Get wallet win rate for additional scoring context
@@ -251,19 +272,60 @@ func (p *Processor) processTrade(ctx context.Context, trade *dataapi.Trade) erro
 	// Calculate funding age (time between funding and first trade)
 	var fundingAgeHours float64
 	var fundingAgeMinutes float64
-	if wallet.FundingReceivedTS > 0 && wallet.FirstSeenTS > 0 {
+	if wallet.FundingReceivedTS > 0 && wallet.FirstSeenTS > 0 && wallet.FirstSeenTS >= wallet.FundingReceivedTS {
 		fundingAgeHours = float64(wallet.FirstSeenTS-wallet.FundingReceivedTS) / 3600.0
 		fundingAgeMinutes = float64(wallet.FirstSeenTS-wallet.FundingReceivedTS) / 60.0
+	} else if wallet.FundingReceivedTS > wallet.FirstSeenTS {
+		// Edge case: API returned first trade as FirstSeenTS but funding came after
+		// This likely means our FirstSeenTS detection is incomplete
+		p.log.WithFields(logrus.Fields{
+			"wallet":           wallet.WalletAddress,
+			"first_seen":       wallet.FirstSeenTS,
+			"funding_received": wallet.FundingReceivedTS,
+		}).Debug("FirstSeenTS predates FundingReceivedTS - possible detection issue")
 	}
 
 	// Check if this is wallet's first trade and it's large
 	var firstTradeLargeMultiplier float64 = 1.0
-	if wallet.TotalTrades == 1 && notional >= p.cfg.MinTradeUSD {
-		firstTradeLargeMultiplier = 2.0
-		p.log.WithFields(logrus.Fields{
-			"wallet":   wallet.WalletAddress,
-			"notional": notional,
-		}).Warn("First trade is very large - highly suspicious")
+	// Use local tracking as primary, but verify for new wallets
+	if isFirstTrade && notional >= p.cfg.MinTradeUSD {
+		// For extra confidence, check if this is truly the first trade via API
+		// Only do this check for very suspicious cases to avoid rate limits
+		if notional >= p.cfg.MinTradeUSD*2 {
+			activity, err := p.dataClient.GetWalletActivity(ctx, trade.ProxyWallet, 10)
+			if err == nil {
+				// Count actual trades from API
+				tradeCount := 0
+				for _, act := range activity {
+					if act.Type == "TRADE" {
+						tradeCount++
+					}
+				}
+				// If API confirms <= 2 trades, this is definitely a first large trade
+				if tradeCount <= 2 {
+					firstTradeLargeMultiplier = 2.0
+					p.log.WithFields(logrus.Fields{
+						"wallet":            wallet.WalletAddress,
+						"notional":          notional,
+						"api_trade_count":   tradeCount,
+					}).Warn("First trade is very large - API verified")
+				}
+			} else {
+				// API failed, fall back to local tracking
+				firstTradeLargeMultiplier = 2.0
+				p.log.WithFields(logrus.Fields{
+					"wallet":   wallet.WalletAddress,
+					"notional": notional,
+				}).Warn("First trade is very large - locally tracked")
+			}
+		} else {
+			// Lower amount, just use local tracking
+			firstTradeLargeMultiplier = 2.0
+			p.log.WithFields(logrus.Fields{
+				"wallet":   wallet.WalletAddress,
+				"notional": notional,
+			}).Warn("First trade is large")
+		}
 	}
 
 	// Check for flash funding (funded and trading within minutes)
@@ -369,9 +431,15 @@ func (p *Processor) processTrade(ctx context.Context, trade *dataapi.Trade) erro
 	if walletAgeDays <= p.cfg.NewWalletDaysMax {
 		// Apply win rate multiplier to severity determination
 		adjustedScore := score
-		if winRate >= p.cfg.MinWinRateThreshold {
+		// Only apply win rate multiplier if wallet has sufficient sample size (5+ resolved trades)
+		if walletStats != nil && walletStats.TotalResolvedTrades >= 5 && winRate >= p.cfg.MinWinRateThreshold {
 			// High win rate increases suspicion
 			adjustedScore *= (1.0 + winRate)
+			p.log.WithFields(logrus.Fields{
+				"wallet":         wallet.WalletAddress,
+				"win_rate":       winRate,
+				"resolved_trades": walletStats.TotalResolvedTrades,
+			}).Info("Applied win rate multiplier")
 		}
 
 		// Apply first trade large multiplier
@@ -486,6 +554,21 @@ func (p *Processor) getOrCreateWallet(ctx context.Context, address string, trade
 		return wallet, nil
 	}
 
+	// New wallet - acquire lock to prevent duplicate API calls from concurrent goroutines
+	lockValue, _ := p.walletLocks.LoadOrStore(address, &sync.Mutex{})
+	lock := lockValue.(*sync.Mutex)
+	lock.Lock()
+	defer lock.Unlock()
+
+	// Double-check after acquiring lock - another goroutine may have created it
+	wallet, err = p.db.GetWallet(ctx, address)
+	if err != nil {
+		return nil, err
+	}
+	if wallet != nil {
+		return wallet, nil
+	}
+
 	// New wallet - get first activity
 	var firstSeenTS, fundingReceivedTS int64
 	var fundingSource string
@@ -510,6 +593,11 @@ func (p *Processor) getOrCreateWallet(ctx context.Context, address string, trade
 		TotalVolumeUSD:    0,
 		LastActivityTS:    tradeTimestamp,
 		UpdatedTS:         time.Now().Unix(),
+	}
+
+	// Insert wallet into database
+	if err := p.db.UpsertWallet(ctx, wallet); err != nil {
+		return nil, fmt.Errorf("insert wallet: %w", err)
 	}
 
 	// Track funding source if detected
@@ -665,6 +753,12 @@ func (p *Processor) updateNetPosition(ctx context.Context, trade *dataapi.Trade,
 	windowHrs := int64(p.cfg.NetPositionWindowHrs)
 	windowStartTS := (trade.Timestamp / (windowHrs * 3600)) * (windowHrs * 3600)
 
+	// Get existing position to properly accumulate
+	existingPos, err := p.db.GetNetPosition(ctx, trade.ProxyWallet, trade.ConditionID, windowStartTS)
+	if err != nil {
+		return fmt.Errorf("get existing net position: %w", err)
+	}
+
 	// Net notional is positive for buys, negative for sells
 	netNotional := notional
 	if trade.Side == "SELL" {
@@ -678,6 +772,12 @@ func (p *Processor) updateNetPosition(ctx context.Context, trade *dataapi.Trade,
 		NetNotionalUSD: netNotional,
 		TradeCount:     1,
 		UpdatedTS:      time.Now().Unix(),
+	}
+
+	// Accumulate if position exists
+	if existingPos != nil {
+		pos.NetNotionalUSD += existingPos.NetNotionalUSD
+		pos.TradeCount += existingPos.TradeCount
 	}
 
 	return p.db.UpsertNetPosition(ctx, pos)
@@ -943,21 +1043,38 @@ func (p *Processor) updateWalletStatsForResolution(ctx context.Context, conditio
 		return fmt.Errorf("get trades: %w", err)
 	}
 
-	// Group trades by wallet and determine if they won or lost
-	walletOutcomes := make(map[string]bool) // true = won, false = lost
+	// Group trades by wallet and accumulate net position to determine outcome
+	type walletPosition struct {
+		netPosition float64 // Positive = long the winning outcome, negative = short it
+		tradeCount  int
+	}
+	walletPositions := make(map[string]*walletPosition)
 
 	for _, trade := range trades {
+		if walletPositions[trade.ProxyWallet] == nil {
+			walletPositions[trade.ProxyWallet] = &walletPosition{}
+		}
+		pos := walletPositions[trade.ProxyWallet]
+		pos.tradeCount++
+
+		// Calculate net position: positive if long winning outcome, negative if short
 		if trade.Side == "BUY" {
-			// Bought the outcome - win if it matches winning outcome
-			walletOutcomes[trade.ProxyWallet] = (trade.Outcome == winningOutcome)
-		} else {
-			// Sold the outcome - win if it DOESN'T match winning outcome
-			walletOutcomes[trade.ProxyWallet] = (trade.Outcome != winningOutcome)
+			if trade.Outcome == winningOutcome {
+				pos.netPosition += trade.NotionalUSD
+			} else {
+				pos.netPosition -= trade.NotionalUSD
+			}
+		} else { // SELL
+			if trade.Outcome == winningOutcome {
+				pos.netPosition -= trade.NotionalUSD
+			} else {
+				pos.netPosition += trade.NotionalUSD
+			}
 		}
 	}
 
-	// Update stats for each wallet
-	for walletAddr, won := range walletOutcomes {
+	// Update stats for each wallet based on net position
+	for walletAddr, pos := range walletPositions {
 		stats, err := p.db.GetWalletStats(ctx, walletAddr)
 		if err != nil {
 			p.log.WithError(err).WithField("wallet", walletAddr).Warn("Failed to get wallet stats")
@@ -970,12 +1087,16 @@ func (p *Processor) updateWalletStatsForResolution(ctx context.Context, conditio
 			}
 		}
 
+		// Wallet wins if net position is positive (profited from the outcome)
+		// Zero or negative position = loss
+		wins := pos.netPosition > 0
 		stats.TotalResolvedTrades++
-		if won {
+		if wins {
 			stats.WinningTrades++
-		} else {
+		} else if pos.netPosition < 0 {
 			stats.LosingTrades++
 		}
+		// Note: pos.netPosition == 0 means perfectly hedged, not counted as win or loss
 
 		// Recalculate win rate
 		if stats.TotalResolvedTrades > 0 {
@@ -1088,11 +1209,16 @@ func (p *Processor) detectCoordinatedTrade(ctx context.Context, trade *dataapi.T
 		}
 	}
 
+	// Include current trade in analysis by adding it to unique wallets
 	// Flag as coordinated if multiple wallets traded this market within 1 hour
-	if len(sameMarketTrades) >= 2 {
+	if len(sameMarketTrades) >= 1 { // Changed from >= 2 since we add current trade below
 		var firstTS, lastTS int64 = trade.Timestamp, trade.Timestamp
 		uniqueWallets := make(map[string]bool)
 		totalNotional := 0.0
+
+		// Include current trade
+		uniqueWallets[walletAddress] = true
+		totalNotional += p.calculateNotional(trade)
 
 		for _, t := range sameMarketTrades {
 			uniqueWallets[t.ProxyWallet] = true
@@ -1157,44 +1283,43 @@ func (p *Processor) checkTradeVelocity(ctx context.Context, walletAddress string
 // checkNetPositionConcentration checks if wallet is heavily concentrated on one side of a market
 // Returns a ratio from 0.0 to 1.0 indicating concentration (1.0 = 100% on one side)
 func (p *Processor) checkNetPositionConcentration(ctx context.Context, walletAddress, conditionID string, currentTS int64, currentNotional float64, currentSide string) (float64, error) {
-	// Calculate current window
+	// Get all trades for this wallet in this market within the window
+	// We need actual trades to calculate gross BUY and SELL volumes
 	windowHrs := int64(p.cfg.NetPositionWindowHrs)
-	windowStartTS := (currentTS / (windowHrs * 3600)) * (windowHrs * 3600)
-
-	// Get existing net position
-	netPos, err := p.db.GetNetPosition(ctx, walletAddress, conditionID, windowStartTS)
+	lookbackTS := currentTS - int64(windowHrs*3600)
+	recentTrades, err := p.db.GetRecentTradesForWallet(ctx, walletAddress, lookbackTS)
 	if err != nil {
-		return 0, fmt.Errorf("get net position: %w", err)
+		return 0, fmt.Errorf("get recent trades: %w", err)
 	}
 
-	// Calculate projected net position after this trade
-	var projectedNet float64
-	if netPos != nil {
-		projectedNet = netPos.NetNotionalUSD
+	// Calculate gross BUY and SELL volumes for this specific market
+	var buyVolume, sellVolume float64
+	for _, trade := range recentTrades {
+		if trade.ConditionID != conditionID {
+			continue
+		}
+		if trade.Side == "BUY" {
+			buyVolume += trade.NotionalUSD
+		} else if trade.Side == "SELL" {
+			sellVolume += trade.NotionalUSD
+		}
 	}
 
-	// Add current trade to projection
+	// Include current trade
 	if currentSide == "BUY" {
-		projectedNet += currentNotional
+		buyVolume += currentNotional
 	} else {
-		projectedNet -= currentNotional
+		sellVolume += currentNotional
 	}
 
-	// Calculate total volume (absolute values)
-	var totalVolume float64
-	if netPos != nil {
-		// Approximate total volume from net position and trade count
-		// This is an estimate since we don't store gross volume
-		totalVolume = math.Abs(netPos.NetNotionalUSD) * float64(netPos.TradeCount) / float64(max(netPos.TradeCount-1, 1))
-	}
-	totalVolume += currentNotional
-
+	totalVolume := buyVolume + sellVolume
 	if totalVolume == 0 {
 		return 0, nil
 	}
 
-	// Concentration is |net| / total volume
-	concentration := math.Abs(projectedNet) / totalVolume
+	// Concentration is the larger side divided by total volume
+	// 1.0 = 100% on one side, 0.5 = balanced
+	concentration := math.Max(buyVolume, sellVolume) / totalVolume
 
 	return concentration, nil
 }

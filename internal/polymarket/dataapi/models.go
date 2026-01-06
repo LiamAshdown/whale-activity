@@ -18,21 +18,34 @@ type Trade struct {
 
 // ActivityEvent represents an activity event for a wallet
 type ActivityEvent struct {
-	ID        string                 `json:"id"`
-	EventType string                 `json:"eventType"`
-	User      string                 `json:"user"`
-	Timestamp int64                  `json:"timestamp"` // Unix timestamp in seconds
-	Details   map[string]interface{} `json:"details"`   // Additional event details
+	ProxyWallet          string  `json:"proxyWallet"`
+	Timestamp            int64   `json:"timestamp"` // Unix timestamp in seconds
+	ConditionID          string  `json:"conditionId"`
+	Type                 string  `json:"type"` // TRADE, TRANSFER, etc.
+	Size                 float64 `json:"size"`
+	USDCSize             float64 `json:"usdcSize"`
+	TransactionHash      string  `json:"transactionHash"`
+	Price                float64 `json:"price"`
+	Asset                string  `json:"asset"`
+	Side                 string  `json:"side"` // BUY, SELL
+	OutcomeIndex         int     `json:"outcomeIndex"`
+	Title                string  `json:"title"`
+	Slug                 string  `json:"slug"`
+	Icon                 string  `json:"icon"`
+	EventSlug            string  `json:"eventSlug"`
+	Outcome              string  `json:"outcome"`
+	Name                 string  `json:"name"`
+	Pseudonym            string  `json:"pseudonym"`
+	Bio                  string  `json:"bio"`
+	ProfileImage         string  `json:"profileImage"`
+	ProfileImageOptimized string `json:"profileImageOptimized"`
 }
 
 // GetFromAddress extracts the 'from' address from activity details (for funding events)
+// Note: This may need to be updated based on actual funding event structure
 func (a *ActivityEvent) GetFromAddress() string {
-	if a.Details == nil {
-		return ""
-	}
-	if from, ok := a.Details["from"].(string); ok {
-		return from
-	}
+	// For TRANSFER type events, the from address might be in a different field
+	// This is a placeholder - update based on actual API response
 	return ""
 }
 

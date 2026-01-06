@@ -173,6 +173,58 @@ func (c *Client) GetWalletFirstActivity(ctx context.Context, wallet string) (*Ac
 	return &activities[0], nil
 }
 
+// GetWalletActivity fetches recent activity for a wallet with a limit
+func (c *Client) GetWalletActivity(ctx context.Context, wallet string, limit int) ([]ActivityEvent, error) {
+	// Rate limit
+	if err := c.activityLimiter.Wait(ctx); err != nil {
+		return nil, fmt.Errorf("rate limit wait: %w", err)
+	}
+
+	u, err := url.Parse(c.baseURL + "/activity")
+	if err != nil {
+		return nil, fmt.Errorf("parse URL: %w", err)
+	}
+
+	q := u.Query()
+	q.Set("user", wallet)
+	q.Set("sortBy", "timestamp")
+	q.Set("sortDirection", "DESC")
+	if limit > 0 {
+		q.Set("limit", strconv.Itoa(limit))
+	}
+	u.RawQuery = q.Encode()
+
+	req, err := http.NewRequestWithContext(ctx, "GET", u.String(), nil)
+	if err != nil {
+		return nil, fmt.Errorf("create request: %w", err)
+	}
+
+	c.setAuthHeaders(req)
+
+	resp, err := c.httpClient.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("execute request: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode == http.StatusUnauthorized {
+		return nil, fmt.Errorf("401 Unauthorized (auth_mode=%s) - check credentials", c.authMode)
+	}
+
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(resp.Body)
+		return nil, fmt.Errorf("unexpected status %d: %s", resp.StatusCode, string(body))
+	}
+
+	// Decode as array directly
+	var activities []ActivityEvent
+	if err := json.NewDecoder(resp.Body).Decode(&activities); err != nil {
+		return nil, fmt.Errorf("decode response: %w", err)
+	}
+
+	return activities, nil
+}
+
 func (c *Client) setAuthHeaders(req *http.Request) {
 	switch c.authMode {
 	case config.AuthModeBearer:
