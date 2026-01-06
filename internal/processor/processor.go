@@ -3,6 +3,7 @@ package processor
 import (
 	"context"
 	"crypto/sha256"
+	"encoding/json"
 	"fmt"
 	"math"
 	"strconv"
@@ -902,8 +903,19 @@ func (p *Processor) determineWinner(outcomes, outcomePrices string) string {
 		return ""
 	}
 
-	outcomeList := strings.Split(outcomes, ",")
-	priceList := strings.Split(outcomePrices, ",")
+	// Parse JSON arrays
+	var outcomeList []string
+	var priceList []string
+	
+	if err := json.Unmarshal([]byte(outcomes), &outcomeList); err != nil {
+		p.log.WithError(err).WithField("outcomes", outcomes).Warn("Failed to parse outcomes JSON")
+		return ""
+	}
+	
+	if err := json.Unmarshal([]byte(outcomePrices), &priceList); err != nil {
+		p.log.WithError(err).WithField("prices", outcomePrices).Warn("Failed to parse prices JSON")
+		return ""
+	}
 
 	if len(outcomeList) != len(priceList) {
 		return ""
@@ -911,12 +923,12 @@ func (p *Processor) determineWinner(outcomes, outcomePrices string) string {
 
 	// Find outcome with price >= 0.95 (95% probability = winner)
 	for i, priceStr := range priceList {
-		price, err := strconv.ParseFloat(strings.TrimSpace(priceStr), 64)
+		price, err := strconv.ParseFloat(priceStr, 64)
 		if err != nil {
 			continue
 		}
 		if price >= 0.95 {
-			return strings.TrimSpace(outcomeList[i])
+			return outcomeList[i]
 		}
 	}
 
