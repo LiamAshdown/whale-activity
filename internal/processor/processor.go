@@ -69,7 +69,7 @@ func (p *Processor) ProcessTrades(ctx context.Context) error {
 
 	// Fetch trades with BIG_TRADE_USD filter (sorted by timestamp DESC for recent-first)
 	params := dataapi.TradeParams{
-		Limit:         100,
+		Limit:         10000,
 		TakerOnly:     true,
 		FilterType:    "CASH",
 		FilterAmount:  p.cfg.BigTradeUSD,
