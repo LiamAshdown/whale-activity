@@ -72,9 +72,9 @@ type Config struct {
 	PollIntervalSec int
 
 	// Alerts
-	AlertMode     string // log, discord, smtp, multi
-	DiscordWebURL string
-	SMTPHost      string
+	AlertMode        string   // log, discord, smtp, multi
+	DiscordWebhookURLs []string // Multiple Discord webhooks
+	SMTPHost         string
 	SMTPPort      int
 	SMTPUser      string
 	SMTPPassword  string
@@ -118,7 +118,6 @@ func Load() (*Config, error) {
 		WalletLookupWorkers:  getEnvInt("WALLET_LOOKUP_WORKERS", 1),
 		PollIntervalSec:      getEnvInt("POLL_INTERVAL_SEC", 30),
 		AlertMode:            getEnv("ALERT_MODE", "log"),
-		DiscordWebURL:        secrets.GetOptionalSecret("DISCORD_WEBHOOK_URL", ""),
 		SMTPHost:             getEnv("SMTP_HOST", ""),
 		SMTPPort:             getEnvInt("SMTP_PORT", 587),
 		SMTPUser:             getEnv("SMTP_USER", ""),
@@ -132,6 +131,12 @@ func Load() (*Config, error) {
 	smtpTo := getEnv("SMTP_TO", "")
 	if smtpTo != "" {
 		cfg.SMTPTo = parseCSV(smtpTo)
+	}
+
+	// Parse Discord webhook URLs (comma-separated)
+	discordWebhooks := secrets.GetOptionalSecret("DISCORD_WEBHOOK_URLS", "")
+	if discordWebhooks != "" {
+		cfg.DiscordWebhookURLs = parseCSV(discordWebhooks)
 	}
 
 	// Parse extra headers JSON
@@ -190,8 +195,8 @@ func (c *Config) Validate() error {
 		}
 	}
 
-	if hasDiscord && c.DiscordWebURL == "" {
-		return fmt.Errorf("DISCORD_WEBHOOK_URL is required when discord is in ALERT_MODE")
+	if hasDiscord && len(c.DiscordWebhookURLs) == 0 {
+		return fmt.Errorf("DISCORD_WEBHOOK_URLS is required when discord is in ALERT_MODE")
 	}
 
 	if hasSMTP && c.SMTPHost == "" {

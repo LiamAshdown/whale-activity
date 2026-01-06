@@ -77,7 +77,8 @@ services:
       # Polling (faster for dev)
       POLL_INTERVAL_SEC: 30
 
-      DISCORD_WEBHOOK_URL: https://discord.com/api/webhooks/1457898819114107021/lbk6_WOvF6rrW8wsT4d0WCoizV1X5KPZ3zFKy6QpRsNvKA-lVTSNKyZXyfhHkB-QNG4u
+      # Discord webhooks (comma-separated for multiple webhooks)
+      DISCORD_WEBHOOK_URLS: https://discord.com/api/webhooks/1457898819114107021/lbk6_WOvF6rrW8wsT4d0WCoizV1X5KPZ3zFKy6QpRsNvKA-lVTSNKyZXyfhHkB-QNG4u
 
       # Alerts (Using MailHog for testing)
       # ALERT_MODE supports comma-separated values: log, discord, smtp
@@ -95,7 +96,6 @@ services:
       METRICS_PORT: 9090
     ports:
       - "8080:8080"
-      - "9090:9090"
     depends_on:
       mysql:
         condition: service_healthy

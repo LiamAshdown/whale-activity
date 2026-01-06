@@ -85,8 +85,8 @@ services:
       # Examples: "log", "discord", "log,discord", "log,discord,smtp"
       ALERT_MODE: ${ALERT_MODE:-log}
 
-      # Discord (set via environment variable)
-      DISCORD_WEBHOOK_URL: ${DISCORD_WEBHOOK_URL}
+      # Discord webhooks (comma-separated for multiple webhooks)
+      DISCORD_WEBHOOK_URLS: ${DISCORD_WEBHOOK_URLS}
 
       # SMTP (set via environment variables)
       SMTP_HOST: ${SMTP_HOST:-""}

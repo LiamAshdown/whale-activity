@@ -147,7 +147,20 @@ func createAlertSender(cfg *config.Config, log *logrus.Logger) alerts.Sender {
 			return alerts.NewLogSender(log)
 
 		case "discord":
-			return alerts.NewDiscordSender(cfg.DiscordWebURL)
+			// Create senders for all webhook URLs
+			if len(cfg.DiscordWebhookURLs) == 0 {
+				log.Warn("Discord mode specified but no webhook URLs configured")
+				return alerts.NewLogSender(log)
+			}
+			if len(cfg.DiscordWebhookURLs) == 1 {
+				return alerts.NewDiscordSender(cfg.DiscordWebhookURLs[0])
+			}
+			// Multiple webhooks - use multi sender
+			discordSenders := []alerts.Sender{}
+			for _, url := range cfg.DiscordWebhookURLs {
+				discordSenders = append(discordSenders, alerts.NewDiscordSender(url))
+			}
+			return alerts.NewMultiSender(discordSenders...)
 
 		case "smtp":
 			return alerts.NewSMTPSender(
@@ -173,10 +186,13 @@ func createAlertSender(cfg *config.Config, log *logrus.Logger) alerts.Sender {
 		case "log":
 			senders = append(senders, alerts.NewLogSender(log))
 		case "discord":
-			if cfg.DiscordWebURL != "" {
-				senders = append(senders, alerts.NewDiscordSender(cfg.DiscordWebURL))
+			if len(cfg.DiscordWebhookURLs) > 0 {
+				// Add a sender for each webhook URL
+				for _, url := range cfg.DiscordWebhookURLs {
+					senders = append(senders, alerts.NewDiscordSender(url))
+				}
 			} else {
-				log.Warn("Discord mode specified but DISCORD_WEBHOOK_URL not set")
+				log.Warn("Discord mode specified but DISCORD_WEBHOOK_URLS not set")
 			}
 		case "smtp":
 			if cfg.SMTPHost != "" {
