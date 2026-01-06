@@ -133,6 +133,55 @@ func (WalletStats) TableName() string {
 	return "wallet_stats"
 }
 
+// WalletFundingSource tracks where wallets receive initial funding from
+type WalletFundingSource struct {
+	WalletAddress  string  `gorm:"primaryKey;size:255"`
+	FundingSource  string  `gorm:"size:255;not null;index"`
+	FundingTS      int64   `gorm:"not null;index"`
+	AmountUSD      float64 `gorm:"type:decimal(20,2);default:0"`
+	TxHash         string  `gorm:"size:255"`
+	CreatedTS      int64   `gorm:"not null"`
+}
+
+func (WalletFundingSource) TableName() string {
+	return "wallet_funding_sources"
+}
+
+// WalletCluster groups wallets funded from the same source
+type WalletCluster struct {
+	ClusterID        string  `gorm:"primaryKey;size:64"`
+	FundingSource    string  `gorm:"uniqueIndex;size:255;not null"`
+	WalletCount      int     `gorm:"not null;default:1"`
+	TotalVolumeUSD   float64 `gorm:"type:decimal(20,2);default:0"`
+	FirstSeenTS      int64   `gorm:"not null"`
+	LastActivityTS   int64   `gorm:"not null;index"`
+	SuspicionScore   float64 `gorm:"type:decimal(10,2);default:0;index"`
+	IsFlagged        bool    `gorm:"default:false"`
+	UpdatedTS        int64   `gorm:"not null"`
+}
+
+func (WalletCluster) TableName() string {
+	return "wallet_clusters"
+}
+
+// CoordinatedTrade tracks synchronized trades across cluster wallets
+type CoordinatedTrade struct {
+	ID               int64   `gorm:"primaryKey;autoIncrement"`
+	ClusterID        string  `gorm:"size:64;not null;index"`
+	ConditionID      string  `gorm:"size:255;not null;index"`
+	WalletCount      int     `gorm:"not null"`
+	TotalNotionalUSD float64 `gorm:"type:decimal(20,2);not null"`
+	TimeWindowSec    int     `gorm:"not null"`
+	FirstTradeTS     int64   `gorm:"not null;index"`
+	LastTradeTS      int64   `gorm:"not null"`
+	MarketTitle      string  `gorm:"type:text"`
+	CreatedTS        int64   `gorm:"not null"`
+}
+
+func (CoordinatedTrade) TableName() string {
+	return "coordinated_trades"
+}
+
 // BeforeCreate hook for timestamps
 func (a *AppState) BeforeCreate(tx *gorm.DB) error {
 	if a.UpdatedTS == 0 {
@@ -179,6 +228,27 @@ func (m *MarketMap) BeforeCreate(tx *gorm.DB) error {
 func (w *WalletStats) BeforeCreate(tx *gorm.DB) error {
 	if w.LastCalculatedTS == 0 {
 		w.LastCalculatedTS = time.Now().Unix()
+	}
+	return nil
+}
+
+func (w *WalletFundingSource) BeforeCreate(tx *gorm.DB) error {
+	if w.CreatedTS == 0 {
+		w.CreatedTS = time.Now().Unix()
+	}
+	return nil
+}
+
+func (w *WalletCluster) BeforeCreate(tx *gorm.DB) error {
+	if w.UpdatedTS == 0 {
+		w.UpdatedTS = time.Now().Unix()
+	}
+	return nil
+}
+
+func (c *CoordinatedTrade) BeforeCreate(tx *gorm.DB) error {
+	if c.CreatedTS == 0 {
+		c.CreatedTS = time.Now().Unix()
 	}
 	return nil
 }

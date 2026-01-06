@@ -51,6 +51,15 @@ type Config struct {
 	TimeToCloseHoursMax  int     // Hours before market close to flag trades
 	MinWinRateThreshold  float64 // Win rate threshold (0.0-1.0) to flag wallets
 
+	// Cluster detection
+	EnableClusterDetection bool // Enable wallet clustering and coordinated trade detection
+	ClusterLookbackHours   int  // Hours to look back for coordinated trades
+
+	// Velocity detection
+	EnableVelocityDetection bool // Enable rapid trade detection
+	VelocityWindowMinutes   int  // Time window for velocity check (e.g., 5 minutes)
+	VelocityThreshold       int  // Number of trades in window to flag (e.g., 3)
+
 	// Rate limits (requests per second)
 	DataAPITradesRPS   float64
 	DataAPIActivityRPS float64
@@ -98,6 +107,11 @@ func Load() (*Config, error) {
 		AlertCooldownMins:    getEnvInt("ALERT_COOLDOWN_MINS", 60),
 		TimeToCloseHoursMax:  getEnvInt("TIME_TO_CLOSE_HOURS_MAX", 48),
 		MinWinRateThreshold:  getEnvFloat("MIN_WIN_RATE_THRESHOLD", 0.75),
+		EnableClusterDetection: getEnvBool("ENABLE_CLUSTER_DETECTION", true),
+		ClusterLookbackHours:   getEnvInt("CLUSTER_LOOKBACK_HOURS", 24),
+		EnableVelocityDetection: getEnvBool("ENABLE_VELOCITY_DETECTION", true),
+		VelocityWindowMinutes:   getEnvInt("VELOCITY_WINDOW_MINUTES", 10),
+		VelocityThreshold:       getEnvInt("VELOCITY_THRESHOLD", 3),
 		DataAPITradesRPS:     getEnvFloat("DATA_API_TRADES_RPS", 2.0),
 		DataAPIActivityRPS:   getEnvFloat("DATA_API_ACTIVITY_RPS", 1.0),
 		GammaAPIMarketsRPS:   getEnvFloat("GAMMA_API_MARKETS_RPS", 5.0),
@@ -190,6 +204,15 @@ func (c *Config) Validate() error {
 func getEnv(key, defaultValue string) string {
 	if value := os.Getenv(key); value != "" {
 		return value
+	}
+	return defaultValue
+}
+
+func getEnvBool(key string, defaultValue bool) bool {
+	if value := os.Getenv(key); value != "" {
+		if boolVal, err := strconv.ParseBool(value); err == nil {
+			return boolVal
+		}
 	}
 	return defaultValue
 }

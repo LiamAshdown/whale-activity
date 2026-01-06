@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"fmt"
+	"math"
 	"strconv"
 	"strings"
 	"sync"
@@ -251,6 +252,95 @@ func (p *Processor) processTrade(ctx context.Context, trade *dataapi.Trade) erro
 		fundingAgeHours = float64(wallet.FirstSeenTS-wallet.FundingReceivedTS) / 3600.0
 	}
 
+	// Check trade velocity (rapid successive trades)
+	var velocityCount int
+	var velocityMultiplier float64 = 1.0
+	if p.cfg.EnableVelocityDetection {
+		var err error
+		velocityCount, err = p.checkTradeVelocity(ctx, trade.ProxyWallet, trade.Timestamp)
+		if err != nil {
+			p.log.WithError(err).Warn("Failed to check trade velocity")
+		} else if velocityCount >= p.cfg.VelocityThreshold {
+			// Apply velocity multiplier: 3 trades = 1.5x, 5 trades = 2.0x, 10+ = 3.0x
+			if velocityCount >= 10 {
+				velocityMultiplier = 3.0
+			} else if velocityCount >= 5 {
+				velocityMultiplier = 2.0
+			} else {
+				velocityMultiplier = 1.5
+			}
+			p.log.WithFields(logrus.Fields{
+				"wallet":       wallet.WalletAddress,
+				"velocity_count": velocityCount,
+				"window_minutes": p.cfg.VelocityWindowMinutes,
+				"multiplier":     velocityMultiplier,
+			}).Warn("High trade velocity detected")
+		}
+	}
+
+	// Check market liquidity ratio (trade size relative to market)
+	var liquidityMultiplier float64 = 1.0
+	if marketInfo != nil && marketInfo.LiquidityNum > 0 {
+		liquidityRatio := notional / marketInfo.LiquidityNum
+		if liquidityRatio > 0.05 { // Trade is 5%+ of market liquidity
+			// 5% = 1.2x, 10% = 1.5x, 20% = 2.0x, 50%+ = 3.0x
+			if liquidityRatio >= 0.50 {
+				liquidityMultiplier = 3.0
+			} else if liquidityRatio >= 0.20 {
+				liquidityMultiplier = 2.0
+			} else if liquidityRatio >= 0.10 {
+				liquidityMultiplier = 1.5
+			} else {
+				liquidityMultiplier = 1.2
+			}
+			p.log.WithFields(logrus.Fields{
+				"wallet":          wallet.WalletAddress,
+				"liquidity_ratio": liquidityRatio,
+				"multiplier":      liquidityMultiplier,
+			}).Warn("Large trade relative to market liquidity")
+		}
+	}
+
+	// Check for extreme price confidence
+	var priceConfidenceMultiplier float64 = 1.0
+	if trade.Price >= 0.85 || trade.Price <= 0.15 {
+		priceConfidenceMultiplier = 1.5
+		p.log.WithFields(logrus.Fields{
+			"wallet": wallet.WalletAddress,
+			"price":  trade.Price,
+			"side":   trade.Side,
+		}).Info("Extreme price confidence detected")
+	}
+
+	// Check net position concentration (one-sided positioning)
+	var concentrationMultiplier float64 = 1.0
+	netPosConcentration, err := p.checkNetPositionConcentration(ctx, trade.ProxyWallet, trade.ConditionID, trade.Timestamp, notional, trade.Side)
+	if err != nil {
+		p.log.WithError(err).Warn("Failed to check net position concentration")
+	} else if netPosConcentration > 0.90 { // 90%+ on one side
+		concentrationMultiplier = 1.5
+		p.log.WithFields(logrus.Fields{
+			"wallet":        wallet.WalletAddress,
+			"concentration": netPosConcentration,
+		}).Warn("High net position concentration detected")
+	}
+
+	// Check for coordinated trading patterns
+	var isCoordinated bool
+	var clusterID string
+	var clusterMultiplier float64 = 1.0
+
+	if p.cfg.EnableClusterDetection {
+		var err error
+		isCoordinated, clusterID, err = p.detectCoordinatedTrade(ctx, trade, trade.ProxyWallet)
+		if err != nil {
+			p.log.WithError(err).Warn("Failed to detect coordinated trade")
+		}
+
+		// Get cluster multiplier
+		clusterMultiplier = p.getClusterMultiplier(ctx, trade.ProxyWallet)
+	}
+
 	// Check if alert should be triggered
 	if walletAgeDays <= p.cfg.NewWalletDaysMax {
 		// Apply win rate multiplier to severity determination
@@ -258,6 +348,62 @@ func (p *Processor) processTrade(ctx context.Context, trade *dataapi.Trade) erro
 		if winRate >= p.cfg.MinWinRateThreshold {
 			// High win rate increases suspicion
 			adjustedScore *= (1.0 + winRate)
+		}
+
+		// Apply liquidity ratio multiplier
+		if liquidityMultiplier > 1.0 {
+			adjustedScore *= liquidityMultiplier
+			p.log.WithFields(logrus.Fields{
+				"wallet":               wallet.WalletAddress,
+				"liquidity_multiplier": liquidityMultiplier,
+			}).Info("Applied liquidity ratio multiplier")
+		}
+
+		// Apply extreme price confidence multiplier
+		if priceConfidenceMultiplier > 1.0 {
+			adjustedScore *= priceConfidenceMultiplier
+			p.log.WithFields(logrus.Fields{
+				"wallet": wallet.WalletAddress,
+				"price":  trade.Price,
+			}).Info("Applied extreme price multiplier")
+		}
+
+		// Apply net position concentration multiplier
+		if concentrationMultiplier > 1.0 {
+			adjustedScore *= concentrationMultiplier
+			p.log.WithFields(logrus.Fields{
+				"wallet":                    wallet.WalletAddress,
+				"concentration_multiplier": concentrationMultiplier,
+			}).Info("Applied concentration multiplier")
+		}
+
+		// Apply velocity multiplier
+		if velocityMultiplier > 1.0 {
+			adjustedScore *= velocityMultiplier
+			p.log.WithFields(logrus.Fields{
+				"wallet":              wallet.WalletAddress,
+				"velocity_count":      velocityCount,
+				"velocity_multiplier": velocityMultiplier,
+			}).Info("Applied velocity multiplier")
+		}
+
+		// Apply cluster multiplier
+		if clusterMultiplier > 1.0 {
+			adjustedScore *= clusterMultiplier
+			p.log.WithFields(logrus.Fields{
+				"wallet":            wallet.WalletAddress,
+				"cluster_id":        clusterID,
+				"cluster_multiplier": clusterMultiplier,
+			}).Info("Applied cluster multiplier")
+		}
+
+		// Extra boost if coordinated trade detected
+		if isCoordinated {
+			adjustedScore *= 2.0
+			p.log.WithFields(logrus.Fields{
+				"wallet":     wallet.WalletAddress,
+				"cluster_id": clusterID,
+			}).Warn("Trade is part of coordinated cluster activity")
 		}
 
 		// Record suspicion score
@@ -299,6 +445,7 @@ func (p *Processor) getOrCreateWallet(ctx context.Context, address string, trade
 
 	// New wallet - get first activity
 	var firstSeenTS, fundingReceivedTS int64
+	var fundingSource string
 	activity, err := p.dataClient.GetWalletFirstActivity(ctx, address)
 	if err != nil {
 		p.log.WithError(err).WithField("wallet", address).Warn("Failed to get first activity, using trade timestamp")
@@ -308,6 +455,8 @@ func (p *Processor) getOrCreateWallet(ctx context.Context, address string, trade
 		firstSeenTS = activity.Timestamp
 		// First activity is likely funding received
 		fundingReceivedTS = activity.Timestamp
+		// Extract funding source if available
+		fundingSource = activity.GetFromAddress()
 	}
 
 	wallet = &storage.Wallet{
@@ -318,6 +467,13 @@ func (p *Processor) getOrCreateWallet(ctx context.Context, address string, trade
 		TotalVolumeUSD:    0,
 		LastActivityTS:    tradeTimestamp,
 		UpdatedTS:         time.Now().Unix(),
+	}
+
+	// Track funding source if detected
+	if fundingSource != "" && p.cfg.EnableClusterDetection {
+		if err := p.trackFundingSource(ctx, address, fundingSource, fundingReceivedTS); err != nil {
+			p.log.WithError(err).Warn("Failed to track funding source")
+		}
 	}
 
 	return wallet, nil
@@ -334,11 +490,13 @@ func (p *Processor) resolveMarket(ctx context.Context, trade *dataapi.Trade) (*M
 		// Check TTL (24 hours)
 		if time.Now().Unix()-cached.UpdatedTS < 86400 {
 			return &MarketInfo{
-				Title:    cached.MarketTitle,
-				Slug:     cached.MarketSlug,
-				URL:      cached.MarketURL,
-				Category: cached.Category,
-				EndDate:  cached.EndDate,
+				Title:        cached.MarketTitle,
+				Slug:         cached.MarketSlug,
+				URL:          cached.MarketURL,
+				Category:     cached.Category,
+				EndDate:      cached.EndDate,
+				LiquidityNum: cached.LiquidityNum,
+				VolumeNum:    cached.VolumeNum,
 			}, nil
 		}
 	}
@@ -347,6 +505,7 @@ func (p *Processor) resolveMarket(ctx context.Context, trade *dataapi.Trade) (*M
 	var marketURL, marketTitle, marketSlug string
 	var category string
 	var endDate int64
+	var liquidityNum, volumeNum float64
 
 	// Always try to get market info from Gamma API for category data
 	market, err := p.gammaClient.GetMarketByConditionID(ctx, trade.ConditionID)
@@ -367,6 +526,8 @@ func (p *Processor) resolveMarket(ctx context.Context, trade *dataapi.Trade) (*M
 		marketTitle = market.Question
 		marketURL = fmt.Sprintf("https://polymarket.com/market/%s", market.Slug)
 		category = market.Category
+		liquidityNum = market.LiquidityNum
+		volumeNum = market.VolumeNum
 
 		// Parse EndDate if present
 		if market.EndDate != "" {
@@ -395,11 +556,13 @@ func (p *Processor) resolveMarket(ctx context.Context, trade *dataapi.Trade) (*M
 	}
 
 	return &MarketInfo{
-		Title:    marketTitle,
-		Slug:     marketSlug,
-		URL:      marketURL,
-		Category: category,
-		EndDate:  endDate,
+		Title:        marketTitle,
+		Slug:         marketSlug,
+		URL:          marketURL,
+		Category:     category,
+		EndDate:      endDate,
+		LiquidityNum: liquidityNum,
+		VolumeNum:    volumeNum,
 	}, nil
 }
 
@@ -775,11 +938,245 @@ func (p *Processor) updateWalletStatsForResolution(ctx context.Context, conditio
 	return nil
 }
 
+// trackFundingSource tracks the funding source for a wallet and updates clusters
+func (p *Processor) trackFundingSource(ctx context.Context, walletAddress, fundingSource string, fundingTS int64) error {
+	// Store funding source
+	source := &storage.WalletFundingSource{
+		WalletAddress: walletAddress,
+		FundingSource: fundingSource,
+		FundingTS:     fundingTS,
+	}
+	if err := p.db.UpsertWalletFundingSource(ctx, source); err != nil {
+		return fmt.Errorf("upsert funding source: %w", err)
+	}
+
+	// Update or create cluster
+	cluster, err := p.db.GetWalletClusterBySource(ctx, fundingSource)
+	if err != nil {
+		return fmt.Errorf("get cluster: %w", err)
+	}
+
+	if cluster == nil {
+		// Create new cluster
+		clusterID := fmt.Sprintf("cluster_%x", sha256.Sum256([]byte(fundingSource)))
+		cluster = &storage.WalletCluster{
+			ClusterID:      clusterID,
+			FundingSource:  fundingSource,
+			WalletCount:    1,
+			FirstSeenTS:    fundingTS,
+			LastActivityTS: fundingTS,
+		}
+	} else {
+		// Update existing cluster
+		cluster.WalletCount++
+		cluster.LastActivityTS = time.Now().Unix()
+	}
+
+	if err := p.db.UpsertWalletCluster(ctx, cluster); err != nil {
+		return fmt.Errorf("upsert cluster: %w", err)
+	}
+
+	// Log if this is a multi-wallet cluster
+	if cluster.WalletCount > 1 {
+		p.log.WithFields(logrus.Fields{
+			"cluster_id":     cluster.ClusterID,
+			"funding_source": fundingSource,
+			"wallet_count":   cluster.WalletCount,
+		}).Info("Detected wallet cluster")
+	}
+
+	return nil
+}
+
+// detectCoordinatedTrade checks if a trade is part of coordinated activity
+func (p *Processor) detectCoordinatedTrade(ctx context.Context, trade *dataapi.Trade, walletAddress string) (bool, string, error) {
+	// Get funding source for this wallet
+	fundingSource, err := p.db.GetWalletFundingSource(ctx, walletAddress)
+	if err != nil {
+		return false, "", err
+	}
+	if fundingSource == nil {
+		return false, "", nil // No funding source tracked
+	}
+
+	// Get cluster
+	cluster, err := p.db.GetWalletClusterBySource(ctx, fundingSource.FundingSource)
+	if err != nil {
+		return false, "", err
+	}
+	if cluster == nil || cluster.WalletCount <= 1 {
+		return false, "", nil // Not a multi-wallet cluster
+	}
+
+	// Get all wallets in this cluster
+	clusterWallets, err := p.db.GetWalletsByFundingSource(ctx, fundingSource.FundingSource)
+	if err != nil {
+		return false, "", err
+	}
+
+	// Get recent trades from cluster wallets (configurable lookback period)
+	lookbackTS := trade.Timestamp - int64(p.cfg.ClusterLookbackHours*3600)
+	var walletAddrs []string
+	for _, w := range clusterWallets {
+		walletAddrs = append(walletAddrs, w.WalletAddress)
+	}
+
+	recentTrades, err := p.db.GetRecentTradesForCluster(ctx, walletAddrs, lookbackTS)
+	if err != nil {
+		return false, "", err
+	}
+
+	// Check for coordinated activity on this market
+	var sameMarketTrades []storage.TradeSeen
+	for _, t := range recentTrades {
+		if t.ConditionID == trade.ConditionID {
+			sameMarketTrades = append(sameMarketTrades, t)
+		}
+	}
+
+	// Flag as coordinated if multiple wallets traded this market within 1 hour
+	if len(sameMarketTrades) >= 2 {
+		var firstTS, lastTS int64 = trade.Timestamp, trade.Timestamp
+		uniqueWallets := make(map[string]bool)
+		totalNotional := 0.0
+
+		for _, t := range sameMarketTrades {
+			uniqueWallets[t.ProxyWallet] = true
+			totalNotional += t.NotionalUSD
+			if t.TimestampSec < firstTS {
+				firstTS = t.TimestampSec
+			}
+			if t.TimestampSec > lastTS {
+				lastTS = t.TimestampSec
+			}
+		}
+
+		timeWindowSec := int(lastTS - firstTS)
+		if timeWindowSec <= 3600 && len(uniqueWallets) >= 2 {
+			// Record coordinated trade
+			coordTrade := &storage.CoordinatedTrade{
+				ClusterID:        cluster.ClusterID,
+				ConditionID:      trade.ConditionID,
+				WalletCount:      len(uniqueWallets),
+				TotalNotionalUSD: totalNotional,
+				TimeWindowSec:    timeWindowSec,
+				FirstTradeTS:     firstTS,
+				LastTradeTS:      lastTS,
+				MarketTitle:      trade.Title,
+			}
+			if err := p.db.InsertCoordinatedTrade(ctx, coordTrade); err != nil {
+				p.log.WithError(err).Warn("Failed to insert coordinated trade")
+			}
+
+			p.log.WithFields(logrus.Fields{
+				"cluster_id":     cluster.ClusterID,
+				"condition_id":   trade.ConditionID,
+				"wallet_count":   len(uniqueWallets),
+				"time_window":    timeWindowSec,
+				"total_notional": totalNotional,
+			}).Warn("Detected coordinated trading activity")
+
+			return true, cluster.ClusterID, nil
+		}
+	}
+
+	return false, "", nil
+}
+
+// checkTradeVelocity checks how many trades a wallet made in the recent time window
+func (p *Processor) checkTradeVelocity(ctx context.Context, walletAddress string, currentTradeTS int64) (int, error) {
+	// Calculate lookback timestamp based on velocity window
+	lookbackTS := currentTradeTS - int64(p.cfg.VelocityWindowMinutes*60)
+
+	// Get recent trades for this wallet
+	recentTrades, err := p.db.GetRecentTradesForWallet(ctx, walletAddress, lookbackTS)
+	if err != nil {
+		return 0, fmt.Errorf("get recent trades: %w", err)
+	}
+
+	// Count trades in the window (including the current one)
+	count := len(recentTrades) + 1
+
+	return count, nil
+}
+
+// checkNetPositionConcentration checks if wallet is heavily concentrated on one side of a market
+// Returns a ratio from 0.0 to 1.0 indicating concentration (1.0 = 100% on one side)
+func (p *Processor) checkNetPositionConcentration(ctx context.Context, walletAddress, conditionID string, currentTS int64, currentNotional float64, currentSide string) (float64, error) {
+	// Calculate current window
+	windowHrs := int64(p.cfg.NetPositionWindowHrs)
+	windowStartTS := (currentTS / (windowHrs * 3600)) * (windowHrs * 3600)
+
+	// Get existing net position
+	netPos, err := p.db.GetNetPosition(ctx, walletAddress, conditionID, windowStartTS)
+	if err != nil {
+		return 0, fmt.Errorf("get net position: %w", err)
+	}
+
+	// Calculate projected net position after this trade
+	var projectedNet float64
+	if netPos != nil {
+		projectedNet = netPos.NetNotionalUSD
+	}
+
+	// Add current trade to projection
+	if currentSide == "BUY" {
+		projectedNet += currentNotional
+	} else {
+		projectedNet -= currentNotional
+	}
+
+	// Calculate total volume (absolute values)
+	var totalVolume float64
+	if netPos != nil {
+		// Approximate total volume from net position and trade count
+		// This is an estimate since we don't store gross volume
+		totalVolume = math.Abs(netPos.NetNotionalUSD) * float64(netPos.TradeCount) / float64(max(netPos.TradeCount-1, 1))
+	}
+	totalVolume += currentNotional
+
+	if totalVolume == 0 {
+		return 0, nil
+	}
+
+	// Concentration is |net| / total volume
+	concentration := math.Abs(projectedNet) / totalVolume
+
+	return concentration, nil
+}
+
+// getClusterMultiplier returns a suspicion score multiplier based on cluster activity
+func (p *Processor) getClusterMultiplier(ctx context.Context, walletAddress string) float64 {
+	fundingSource, err := p.db.GetWalletFundingSource(ctx, walletAddress)
+	if err != nil || fundingSource == nil {
+		return 1.0
+	}
+
+	cluster, err := p.db.GetWalletClusterBySource(ctx, fundingSource.FundingSource)
+	if err != nil || cluster == nil {
+		return 1.0
+	}
+
+	// Multiplier based on cluster size
+	// 2 wallets = 1.5x, 5 wallets = 2.0x, 10+ wallets = 3.0x
+	if cluster.WalletCount >= 10 {
+		return 3.0
+	} else if cluster.WalletCount >= 5 {
+		return 2.0
+	} else if cluster.WalletCount >= 2 {
+		return 1.5
+	}
+
+	return 1.0
+}
+
 // MarketInfo holds resolved market information
 type MarketInfo struct {
-	Title    string
-	Slug     string
-	URL      string
-	Category string
-	EndDate  int64 // Unix timestamp
+	Title        string
+	Slug         string
+	URL          string
+	Category     string
+	EndDate      int64   // Unix timestamp
+	LiquidityNum float64 // Market liquidity for ratio analysis
+	VolumeNum    float64 // Market volume
 }

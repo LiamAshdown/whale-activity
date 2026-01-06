@@ -18,10 +18,22 @@ type Trade struct {
 
 // ActivityEvent represents an activity event for a wallet
 type ActivityEvent struct {
-	ID        string `json:"id"`
-	EventType string `json:"eventType"`
-	User      string `json:"user"`
-	Timestamp int64  `json:"timestamp"` // Unix timestamp in seconds
+	ID        string                 `json:"id"`
+	EventType string                 `json:"eventType"`
+	User      string                 `json:"user"`
+	Timestamp int64                  `json:"timestamp"` // Unix timestamp in seconds
+	Details   map[string]interface{} `json:"details"`   // Additional event details
+}
+
+// GetFromAddress extracts the 'from' address from activity details (for funding events)
+func (a *ActivityEvent) GetFromAddress() string {
+	if a.Details == nil {
+		return ""
+	}
+	if from, ok := a.Details["from"].(string); ok {
+		return from
+	}
+	return ""
 }
 
 // TradesResponse wraps the trades API response

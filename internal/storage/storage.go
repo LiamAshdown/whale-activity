@@ -80,6 +80,9 @@ func (db *DB) AutoMigrate() error {
 		&MarketMap{},
 		&MarketResolution{},
 		&WalletStats{},
+		&WalletFundingSource{},
+		&WalletCluster{},
+		&CoordinatedTrade{},
 	)
 }
 
@@ -308,6 +311,82 @@ func (db *DB) GetAllConditionIDs(ctx context.Context) ([]string, error) {
 		Distinct("condition_id").
 		Pluck("condition_id", &conditionIDs)
 	return conditionIDs, result.Error
+}
+
+// UpsertWalletFundingSource inserts or updates wallet funding source
+func (db *DB) UpsertWalletFundingSource(ctx context.Context, source *WalletFundingSource) error {
+	result := db.conn.WithContext(ctx).Save(source)
+	return result.Error
+}
+
+// GetWalletFundingSource retrieves funding source for a wallet
+func (db *DB) GetWalletFundingSource(ctx context.Context, walletAddress string) (*WalletFundingSource, error) {
+	var source WalletFundingSource
+	result := db.conn.WithContext(ctx).Where("wallet_address = ?", walletAddress).First(&source)
+	if result.Error != nil {
+		if result.Error == gorm.ErrRecordNotFound {
+			return nil, nil
+		}
+		return nil, result.Error
+	}
+	return &source, nil
+}
+
+// GetWalletsByFundingSource retrieves all wallets funded by the same source
+func (db *DB) GetWalletsByFundingSource(ctx context.Context, fundingSource string) ([]WalletFundingSource, error) {
+	var wallets []WalletFundingSource
+	result := db.conn.WithContext(ctx).Where("funding_source = ?", fundingSource).Find(&wallets)
+	return wallets, result.Error
+}
+
+// UpsertWalletCluster inserts or updates a wallet cluster
+func (db *DB) UpsertWalletCluster(ctx context.Context, cluster *WalletCluster) error {
+	result := db.conn.WithContext(ctx).Save(cluster)
+	return result.Error
+}
+
+// GetWalletClusterBySource retrieves cluster by funding source
+func (db *DB) GetWalletClusterBySource(ctx context.Context, fundingSource string) (*WalletCluster, error) {
+	var cluster WalletCluster
+	result := db.conn.WithContext(ctx).Where("funding_source = ?", fundingSource).First(&cluster)
+	if result.Error != nil {
+		if result.Error == gorm.ErrRecordNotFound {
+			return nil, nil
+		}
+		return nil, result.Error
+	}
+	return &cluster, nil
+}
+
+// InsertCoordinatedTrade records a coordinated trade event
+func (db *DB) InsertCoordinatedTrade(ctx context.Context, trade *CoordinatedTrade) error {
+	result := db.conn.WithContext(ctx).Create(trade)
+	return result.Error
+}
+
+// GetRecentTradesForCluster gets recent trades from wallets in a cluster
+func (db *DB) GetRecentTradesForCluster(ctx context.Context, walletAddresses []string, sinceTS int64) ([]TradeSeen, error) {
+	if len(walletAddresses) == 0 {
+		return nil, nil
+	}
+	var trades []TradeSeen
+	result := db.conn.WithContext(ctx).
+		Where("proxy_wallet IN ?", walletAddresses).
+		Where("timestamp_sec >= ?", sinceTS).
+		Order("timestamp_sec DESC").
+		Find(&trades)
+	return trades, result.Error
+}
+
+// GetRecentTradesForWallet gets recent trades for a specific wallet
+func (db *DB) GetRecentTradesForWallet(ctx context.Context, walletAddress string, sinceTS int64) ([]TradeSeen, error) {
+	var trades []TradeSeen
+	result := db.conn.WithContext(ctx).
+		Where("proxy_wallet = ?", walletAddress).
+		Where("timestamp_sec >= ?", sinceTS).
+		Order("timestamp_sec DESC").
+		Find(&trades)
+	return trades, result.Error
 }
 
 // gormLogAdapter adapts logrus to GORM's logger interface
