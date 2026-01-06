@@ -122,8 +122,8 @@ func TestCalculateSuspicionScore(t *testing.T) {
 
 func TestDetermineSeverity(t *testing.T) {
 	cfg := &config.Config{
-		SuspicionScoreAlert: 25000,
-		SuspicionScoreWarn:  10000,
+		SuspicionScoreAlert: 85.0,
+		SuspicionScoreWarn:  70.0,
 	}
 	log := logrus.New()
 	p := &Processor{cfg: cfg, log: log}
@@ -133,15 +133,15 @@ func TestDetermineSeverity(t *testing.T) {
 		score            float64
 		expectedSeverity alerts.Severity
 	}{
-		{"critical threshold exact", 25000, alerts.SeverityAlert},
-		{"critical above threshold", 30000, alerts.SeverityAlert},
-		{"high threshold exact", 10000, alerts.SeverityWarn},
-		{"high above threshold", 15000, alerts.SeverityWarn},
-		{"info below thresholds", 5000, alerts.SeverityInfo},
-		{"info very low", 100, alerts.SeverityInfo},
-		{"info zero", 0, alerts.SeverityInfo},
-		{"just below critical", 24999, alerts.SeverityWarn},
-		{"just below high", 9999, alerts.SeverityInfo},
+		{"critical threshold exact", 85.0, alerts.SeverityAlert},
+		{"critical above threshold", 92.0, alerts.SeverityAlert},
+		{"high threshold exact", 70.0, alerts.SeverityWarn},
+		{"high above threshold", 78.0, alerts.SeverityWarn},
+		{"info below thresholds", 50.0, alerts.SeverityInfo},
+		{"info very low", 10.0, alerts.SeverityInfo},
+		{"info zero", 0.0, alerts.SeverityInfo},
+		{"just below critical", 84.9, alerts.SeverityWarn},
+		{"just below high", 69.9, alerts.SeverityInfo},
 	}
 
 	for _, tt := range tests {
@@ -150,6 +150,116 @@ func TestDetermineSeverity(t *testing.T) {
 			if severity != tt.expectedSeverity {
 				t.Errorf("score %.0f: got %s, want %s",
 					tt.score, severity, tt.expectedSeverity)
+			}
+		})
+	}
+}
+
+func TestNormalizeScore(t *testing.T) {
+	cfg := &config.Config{}
+	log := logrus.New()
+	p := &Processor{cfg: cfg, log: log}
+
+	tests := []struct {
+		name             string
+		rawScore         float64
+		expectedNormalized float64
+		description      string
+	}{
+		{
+			name:             "zero score",
+			rawScore:         0,
+			expectedNormalized: 0,
+			description:      "Zero raw score maps to 0",
+		},
+		{
+			name:             "very small score",
+			rawScore:         100,
+			expectedNormalized: 33.4,
+			description:      "100 raw score maps to ~33",
+		},
+		{
+			name:             "small score",
+			rawScore:         1000,
+			expectedNormalized: 50.0,
+			description:      "1,000 raw score maps to ~50",
+		},
+		{
+			name:             "medium score",
+			rawScore:         10000,
+			expectedNormalized: 66.7,
+			description:      "10,000 raw score maps to ~67",
+		},
+		{
+			name:             "high score",
+			rawScore:         50000,
+			expectedNormalized: 78.3,
+			description:      "50,000 raw score maps to ~78",
+		},
+		{
+			name:             "very high score",
+			rawScore:         100000,
+			expectedNormalized: 83.3,
+			description:      "100,000 raw score maps to ~83",
+		},
+		{
+			name:             "extreme score",
+			rawScore:         500000,
+			expectedNormalized: 95.0,
+			description:      "500,000 raw score maps to ~95",
+		},
+		{
+			name:             "maximum expected",
+			rawScore:         1000000,
+			expectedNormalized: 100.0,
+			description:      "1,000,000 raw score maps to 100",
+		},
+		{
+			name:             "above maximum capped",
+			rawScore:         5000000,
+			expectedNormalized: 100.0,
+			description:      "Scores above 1M are capped at 100",
+		},
+		{
+			name:             "typical insider trade",
+			rawScore:         125000,
+			expectedNormalized: 84.9,
+			description:      "Typical flagged trade around 85/100",
+		},
+		{
+			name:             "warning threshold equivalent",
+			rawScore:         31623, // Should normalize to ~75
+			expectedNormalized: 75.0,
+			description:      "Raw score that maps to 75/100",
+		},
+		{
+			name:             "alert threshold equivalent",
+			rawScore:         177828, // Should normalize to ~87.5
+			expectedNormalized: 87.5,
+			description:      "Raw score that maps to ~87.5/100",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			normalized := p.normalizeScore(tt.rawScore)
+			
+			// Allow 0.5 point tolerance for normalized scores
+			tolerance := 0.5
+			diff := normalized - tt.expectedNormalized
+			if diff < 0 {
+				diff = -diff
+			}
+			
+			if diff > tolerance {
+				t.Errorf("%s: got %.1f, want %.1f (diff: %.1f)\nRaw score: %.0f\nDescription: %s",
+					tt.name, normalized, tt.expectedNormalized, diff, tt.rawScore, tt.description)
+			}
+			
+			// Verify score is within valid range
+			if normalized < 0 || normalized > 100 {
+				t.Errorf("%s: normalized score %.1f is out of valid range [0, 100]",
+					tt.name, normalized)
 			}
 		})
 	}
@@ -169,85 +279,85 @@ func TestDetermineWinner(t *testing.T) {
 	}{
 		{
 			name:           "clear YES winner",
-			outcomes:       "YES,NO",
-			outcomePrices:  "0.98,0.02",
+			outcomes:       `["YES","NO"]`,
+			outcomePrices:  `["0.98","0.02"]`,
 			expectedWinner: "YES",
 			description:    "YES at 98% is clear winner",
 		},
 		{
 			name:           "clear NO winner",
-			outcomes:       "YES,NO",
-			outcomePrices:  "0.02,0.98",
+			outcomes:       `["YES","NO"]`,
+			outcomePrices:  `["0.02","0.98"]`,
 			expectedWinner: "NO",
 			description:    "NO at 98% is clear winner",
 		},
 		{
 			name:           "exact 95% threshold",
-			outcomes:       "YES,NO",
-			outcomePrices:  "0.95,0.05",
+			outcomes:       `["YES","NO"]`,
+			outcomePrices:  `["0.95","0.05"]`,
 			expectedWinner: "YES",
 			description:    "95% exactly meets threshold",
 		},
 		{
 			name:           "just below threshold",
-			outcomes:       "YES,NO",
-			outcomePrices:  "0.94,0.06",
+			outcomes:       `["YES","NO"]`,
+			outcomePrices:  `["0.94","0.06"]`,
 			expectedWinner: "",
 			description:    "94% does not meet 95% threshold",
 		},
 		{
 			name:           "multi-outcome with winner",
-			outcomes:       "Donald Trump,Kamala Harris,Other",
-			outcomePrices:  "0.96,0.03,0.01",
+			outcomes:       `["Donald Trump","Kamala Harris","Other"]`,
+			outcomePrices:  `["0.96","0.03","0.01"]`,
 			expectedWinner: "Donald Trump",
 			description:    "First outcome wins in 3-way market",
 		},
 		{
 			name:           "multi-outcome no clear winner",
-			outcomes:       "A,B,C",
-			outcomePrices:  "0.50,0.30,0.20",
+			outcomes:       `["A","B","C"]`,
+			outcomePrices:  `["0.50","0.30","0.20"]`,
 			expectedWinner: "",
 			description:    "No outcome reaches 95%",
 		},
 		{
 			name:           "empty outcomes",
 			outcomes:       "",
-			outcomePrices:  "0.98,0.02",
+			outcomePrices:  `["0.98","0.02"]`,
 			expectedWinner: "",
 			description:    "Empty outcomes string",
 		},
 		{
 			name:           "empty prices",
-			outcomes:       "YES,NO",
+			outcomes:       `["YES","NO"]`,
 			outcomePrices:  "",
 			expectedWinner: "",
 			description:    "Empty prices string",
 		},
 		{
 			name:           "mismatched lengths",
-			outcomes:       "YES,NO,MAYBE",
-			outcomePrices:  "0.50,0.50",
+			outcomes:       `["YES","NO","MAYBE"]`,
+			outcomePrices:  `["0.50","0.50"]`,
 			expectedWinner: "",
 			description:    "3 outcomes but only 2 prices",
 		},
 		{
 			name:           "invalid price format",
-			outcomes:       "YES,NO",
-			outcomePrices:  "invalid,0.98",
+			outcomes:       `["YES","NO"]`,
+			outcomePrices:  `["invalid","0.98"]`,
 			expectedWinner: "NO",
 			description:    "Skips invalid price, finds valid winner",
 		},
 		{
 			name:           "whitespace handling",
-			outcomes:       " YES , NO ",
-			outcomePrices:  " 0.98 , 0.02 ",
-			expectedWinner: "YES",
-			description:    "Trims whitespace from outcomes",
+			outcomes:       `[" YES "," NO "]`,
+			outcomePrices:  `[" 0.98 "," 0.02 "]`,
+			expectedWinner: " YES ",
+			description:    "Preserves whitespace in outcome names from JSON",
 		},
 		{
 			name:           "100% certainty",
-			outcomes:       "YES,NO",
-			outcomePrices:  "1.0,0.0",
+			outcomes:       `["YES","NO"]`,
+			outcomePrices:  `["1.0","0.0"]`,
 			expectedWinner: "YES",
 			description:    "100% price is valid winner",
 		},
@@ -267,35 +377,35 @@ func TestDetermineWinner(t *testing.T) {
 func TestIsNotInsiderCategory(t *testing.T) {
 	tests := []struct {
 		name     string
-		category string
+		market   *MarketInfo
 		expected bool
 	}{
-		{"empty category", "", false},
-		{"sports exact", "sports", true},
-		{"sports uppercase", "SPORTS", true},
-		{"sports in phrase", "Professional Sports", true},
-		{"nfl", "NFL", true},
-		{"nba", "NBA", true},
-		{"mlb", "MLB", true},
-		{"soccer lowercase", "soccer", true},
-		{"football", "football", true},
-		{"basketball", "basketball", true},
-		{"ufc", "UFC", true},
-		{"politics", "politics", false},
-		{"crypto", "crypto", false},
-		{"business", "business", false},
-		{"elections", "elections", false},
-		{"science", "science", false},
-		{"sport singular not matched", "sport", false}, // Only "sports" plural matches
-		{"contains nba", "NBA Playoffs", true},
-		{"contains politics no match", "US Politics", false},
+		{"empty category", &MarketInfo{Category: "", Slug: ""}, false},
+		{"sports exact", &MarketInfo{Category: "sports", Slug: ""}, true},
+		{"sports uppercase", &MarketInfo{Category: "SPORTS", Slug: ""}, true},
+		{"sports in phrase", &MarketInfo{Category: "Professional Sports", Slug: ""}, true},
+		{"nfl", &MarketInfo{Category: "NFL", Slug: ""}, true},
+		{"nba", &MarketInfo{Category: "NBA", Slug: ""}, true},
+		{"mlb", &MarketInfo{Category: "MLB", Slug: ""}, true},
+		{"soccer lowercase", &MarketInfo{Category: "soccer", Slug: ""}, true},
+		{"football", &MarketInfo{Category: "football", Slug: ""}, true},
+		{"basketball", &MarketInfo{Category: "basketball", Slug: ""}, true},
+		{"ufc", &MarketInfo{Category: "UFC", Slug: ""}, true},
+		{"politics", &MarketInfo{Category: "politics", Slug: ""}, false},
+		{"crypto", &MarketInfo{Category: "crypto", Slug: ""}, false},
+		{"business", &MarketInfo{Category: "business", Slug: ""}, false},
+		{"elections", &MarketInfo{Category: "elections", Slug: ""}, false},
+		{"science", &MarketInfo{Category: "science", Slug: ""}, false},
+		{"sport singular not matched", &MarketInfo{Category: "sport", Slug: ""}, false}, // Only "sports" plural matches
+		{"contains nba", &MarketInfo{Category: "NBA Playoffs", Slug: ""}, true},
+		{"contains politics no match", &MarketInfo{Category: "US Politics", Slug: ""}, false},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			result := isNotInsiderCategory(tt.category)
+			result := isNotInsiderCategory(tt.market)
 			if result != tt.expected {
-				t.Errorf("category '%s': got %v, want %v", tt.category, result, tt.expected)
+				t.Errorf("category '%s': got %v, want %v", tt.market.Category, result, tt.expected)
 			}
 		})
 	}

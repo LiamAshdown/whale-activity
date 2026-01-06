@@ -109,11 +109,21 @@ var (
 	)
 
 	// Suspicion score metrics
-	SuspicionScores = promauto.NewHistogram(
+	// Raw scores track the pre-normalization values to understand actual distribution
+	SuspicionScoresRaw = promauto.NewHistogram(
 		prometheus.HistogramOpts{
-			Name:    "insiderwatch_suspicion_scores",
-			Help:    "Distribution of calculated suspicion scores",
-			Buckets: []float64{100, 500, 1000, 5000, 10000, 25000, 50000, 100000, 500000, 1000000},
+			Name:    "insiderwatch_suspicion_scores_raw",
+			Help:    "Distribution of raw suspicion scores (before normalization)",
+			Buckets: []float64{100, 500, 1000, 5000, 10000, 25000, 50000, 100000, 250000, 500000, 1000000, 5000000},
+		},
+	)
+
+	// Normalized scores (0-100) to verify calibration is working correctly
+	SuspicionScoresNormalized = promauto.NewHistogram(
+		prometheus.HistogramOpts{
+			Name:    "insiderwatch_suspicion_scores_normalized",
+			Help:    "Distribution of normalized suspicion scores (0-100 scale)",
+			Buckets: []float64{10, 20, 30, 40, 50, 60, 70, 75, 80, 85, 90, 95, 100},
 		},
 	)
 
@@ -171,9 +181,14 @@ func RecordWinRateCalculation(duration time.Duration, marketsResolved int) {
 	WinRateCalculationDuration.Observe(duration.Seconds())
 }
 
-// RecordSuspicionScore records suspicion score for histogram
-func RecordSuspicionScore(score float64) {
-	SuspicionScores.Observe(score)
+// RecordSuspicionScore records both raw and normalized suspicion scores
+// This allows us to:
+// 1. Observe actual raw score distribution in production
+// 2. Verify normalization is working correctly (should cluster around meaningful ranges)
+// 3. Calibrate the normalization function based on real data
+func RecordSuspicionScore(rawScore, normalizedScore float64) {
+	SuspicionScoresRaw.Observe(rawScore)
+	SuspicionScoresNormalized.Observe(normalizedScore)
 }
 
 // RecordHealthCheck records health check status
