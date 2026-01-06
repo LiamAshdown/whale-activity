@@ -159,7 +159,7 @@ func (p *Processor) processTrade(ctx context.Context, trade *dataapi.Trade) erro
 	}
 
 	// Skip markets that can't involve insider trading (sports, entertainment, etc.)
-	if marketInfo != nil && isNotInsiderCategory(marketInfo.Category) {
+	if marketInfo != nil && isNotInsiderCategory(marketInfo) {
 		metrics.TradesProcessed.WithLabelValues("filtered_sports").Inc()
 		p.log.WithFields(logrus.Fields{
 			"category":     marketInfo.Category,
@@ -751,10 +751,7 @@ func (p *Processor) calculateSuspicionScore(notional float64, walletAgeDays int,
 
 // isNotInsiderCategory checks if a market category cannot involve insider trading
 // (sports, entertainment, etc.)
-func isNotInsiderCategory(category string) bool {
-	if category == "" {
-		return false
-	}
+func isNotInsiderCategory(market *MarketInfo) bool {
 	excludedCategories := []string{
 		"sports",
 		"nfl",
@@ -775,9 +772,9 @@ func isNotInsiderCategory(category string) bool {
 		"f1",
 		"nascar",
 	}
-	categoryLower := strings.ToLower(category)
+
 	for _, excluded := range excludedCategories {
-		if strings.Contains(categoryLower, excluded) {
+		if strings.Contains(strings.ToLower(market.Category), excluded) || strings.Contains(strings.ToLower(market.Slug), excluded) {
 			return true
 		}
 	}
