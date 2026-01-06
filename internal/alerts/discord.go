@@ -7,6 +7,8 @@ import (
 	"fmt"
 	"net/http"
 	"time"
+
+	"golang.org/x/text/number"
 )
 
 // DiscordSender sends alerts to Discord via webhook
@@ -74,7 +76,7 @@ func (s *DiscordSender) buildEmbed(payload *AlertPayload) map[string]interface{}
 
 	// Build description
 	description := fmt.Sprintf("**$%.2f** on **%s** @ **%.2f**\nWallet age **%dd** (first seen %s)",
-		payload.NotionalUSD,
+		number.Decimal(payload.NotionalUSD),
 		payload.Outcome,
 		payload.Price,
 		payload.WalletAgeDays,
@@ -100,7 +102,7 @@ func (s *DiscordSender) buildEmbed(payload *AlertPayload) map[string]interface{}
 		},
 		{
 			"name":   "Bet Total",
-			"value":  fmt.Sprintf("$%.2f", payload.NotionalUSD),
+			"value":  fmt.Sprintf("$%.2f", number.Decimal(payload.NotionalUSD)),
 			"inline": true,
 		},
 		{
