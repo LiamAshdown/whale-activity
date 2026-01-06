@@ -99,22 +99,22 @@ func (s *DiscordSender) buildEmbed(payload *AlertPayload) map[string]interface{}
 			"inline": true,
 		},
 		{
-			"name":   "Notional",
+			"name":   "Bet Total",
 			"value":  fmt.Sprintf("$%.2f", payload.NotionalUSD),
 			"inline": true,
 		},
 		{
-			"name":   "Price",
+			"name":   "Bet Price",
 			"value":  fmt.Sprintf("%.2f", payload.Price),
 			"inline": true,
 		},
 		{
-			"name":   "Age",
+			"name":   "Wallet Age",
 			"value":  fmt.Sprintf("%d days", payload.WalletAgeDays),
 			"inline": true,
 		},
 		{
-			"name":   "Score",
+			"name":   "Suspicion Score",
 			"value":  fmt.Sprintf("%.2f", payload.SuspicionScore),
 			"inline": true,
 		},
