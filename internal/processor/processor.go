@@ -167,15 +167,16 @@ func (p *Processor) processTrade(ctx context.Context, trade *dataapi.Trade) erro
 	}
 
 	// Skip trades for markets that have already ended/resolved
-	// And market ending needs to be within 2 months from now
-	if marketInfo != nil && marketInfo.EndDate > 0 && (trade.Timestamp > marketInfo.EndDate || marketInfo.EndDate >= time.Now().AddDate(0, 2, 0).Unix()) {
+	// Or markets ending more than 2 months from now (too far in future)
+	twoMonthsFromNow := time.Now().AddDate(0, 2, 0).Unix()
+	if marketInfo != nil && marketInfo.EndDate > 0 && (trade.Timestamp > marketInfo.EndDate || marketInfo.EndDate > twoMonthsFromNow) {
 		metrics.TradesProcessed.WithLabelValues("filtered_closed").Inc()
 		p.log.WithFields(logrus.Fields{
 			"condition_id": trade.ConditionID,
 			"title":        marketInfo.Title,
 			"trade_time":   trade.Timestamp,
 			"end_date":     marketInfo.EndDate,
-		}).Debug("Skipping trade for closed market")
+		}).Debug("Skipping trade for closed or distant market")
 		return nil
 	}
 
@@ -248,8 +249,30 @@ func (p *Processor) processTrade(ctx context.Context, trade *dataapi.Trade) erro
 
 	// Calculate funding age (time between funding and first trade)
 	var fundingAgeHours float64
+	var fundingAgeMinutes float64
 	if wallet.FundingReceivedTS > 0 && wallet.FirstSeenTS > 0 {
 		fundingAgeHours = float64(wallet.FirstSeenTS-wallet.FundingReceivedTS) / 3600.0
+		fundingAgeMinutes = float64(wallet.FirstSeenTS-wallet.FundingReceivedTS) / 60.0
+	}
+
+	// Check if this is wallet's first trade and it's large
+	var firstTradeLargeMultiplier float64 = 1.0
+	if wallet.TotalTrades == 1 && notional >= p.cfg.MinTradeUSD {
+		firstTradeLargeMultiplier = 2.0
+		p.log.WithFields(logrus.Fields{
+			"wallet":   wallet.WalletAddress,
+			"notional": notional,
+		}).Warn("First trade is very large - highly suspicious")
+	}
+
+	// Check for flash funding (funded and trading within minutes)
+	var flashFundingMultiplier float64 = 1.0
+	if fundingAgeMinutes > 0 && fundingAgeMinutes <= 5 {
+		flashFundingMultiplier = 3.0
+		p.log.WithFields(logrus.Fields{
+			"wallet":              wallet.WalletAddress,
+			"funding_age_minutes": fundingAgeMinutes,
+		}).Warn("Flash funding detected - funded and trading within minutes")
 	}
 
 	// Check trade velocity (rapid successive trades)
@@ -348,6 +371,25 @@ func (p *Processor) processTrade(ctx context.Context, trade *dataapi.Trade) erro
 		if winRate >= p.cfg.MinWinRateThreshold {
 			// High win rate increases suspicion
 			adjustedScore *= (1.0 + winRate)
+		}
+
+		// Apply first trade large multiplier
+		if firstTradeLargeMultiplier > 1.0 {
+			adjustedScore *= firstTradeLargeMultiplier
+			p.log.WithFields(logrus.Fields{
+				"wallet":                      wallet.WalletAddress,
+				"first_trade_large_multiplier": firstTradeLargeMultiplier,
+			}).Info("Applied first trade large multiplier")
+		}
+
+		// Apply flash funding multiplier
+		if flashFundingMultiplier > 1.0 {
+			adjustedScore *= flashFundingMultiplier
+			p.log.WithFields(logrus.Fields{
+				"wallet":                   wallet.WalletAddress,
+				"funding_age_minutes":      fundingAgeMinutes,
+				"flash_funding_multiplier": flashFundingMultiplier,
+			}).Info("Applied flash funding multiplier")
 		}
 
 		// Apply liquidity ratio multiplier
