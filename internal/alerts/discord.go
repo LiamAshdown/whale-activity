@@ -195,7 +195,7 @@ func (s *DiscordSender) formatScoreBreakdown(b *ScoreBreakdown) string {
 		parts = append(parts, fmt.Sprintf("\n🎯 Final Suspicion Score: **%.0f/100** (raw: %.0f)", b.NormalizedScore, b.FinalScore))
 	}
 	
-	return fmt.Sprintf("```\n%s\n```", truncate(joinParts(parts), 1000))
+	return truncate(joinParts(parts), 1000)
 }
 
 func joinParts(parts []string) string {
