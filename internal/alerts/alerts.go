@@ -29,6 +29,7 @@ type ScoreBreakdown struct {
 	CoordinatedMultiplier      float64
 	FundingAgeMultiplier       float64
 	FinalScore                 float64
+	NormalizedScore            float64 // 0-100 normalized score
 	
 	// Context for understanding the score
 	WinRate                    float64
@@ -53,11 +54,12 @@ type AlertPayload struct {
 	Outcome         string
 	NotionalUSD     float64
 	Price           float64
-	WalletAgeDays   int
-	FirstSeenDate   string
-	SuspicionScore  float64
-	ScoreBreakdown  *ScoreBreakdown // Calculation details
-	TransactionHash string
+	WalletAgeDays      int
+	FirstSeenDate      string
+	SuspicionScore     float64 // Raw score (kept for backwards compatibility)
+	NormalizedScore    float64 // 0-100 normalized score (primary display)
+	ScoreBreakdown     *ScoreBreakdown // Calculation details
+	TransactionHash    string
 	TxHashShort     string // Shortened for display
 	Timestamp       time.Time
 	Environment     string

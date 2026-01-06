@@ -67,7 +67,7 @@ func (s *SMTPSender) buildEmailBody(payload *AlertPayload) string {
 	body += fmt.Sprintf("─────────────────────────────────────\n")
 	body += fmt.Sprintf("Address:        %s\n", payload.WalletAddress)
 	body += fmt.Sprintf("Age:            %d days (first seen %s)\n", payload.WalletAgeDays, payload.FirstSeenDate)
-	body += fmt.Sprintf("Suspicion Score: %.2f\n\n", payload.SuspicionScore)
+	body += fmt.Sprintf("Suspicion Score: %.0f/100 (raw: %.0f)\n\n", payload.NormalizedScore, payload.SuspicionScore)
 	
 	// Add score breakdown if available
 	if payload.ScoreBreakdown != nil {
@@ -126,7 +126,8 @@ func (s *SMTPSender) formatScoreBreakdown(b *ScoreBreakdown) string {
 		breakdown += fmt.Sprintf("Fast Funding:   %.2fx (%.1f hours)\n", b.FundingAgeMultiplier, b.FundingAgeHours)
 	}
 	
-	breakdown += fmt.Sprintf("\nFinal Score:    %.0f\n\n", b.FinalScore)
+	breakdown += fmt.Sprintf("\nNormalized:     %.0f/100\n", b.NormalizedScore)
+	breakdown += fmt.Sprintf("Raw Score:      %.0f\n\n", b.FinalScore)
 	
 	return breakdown
 }

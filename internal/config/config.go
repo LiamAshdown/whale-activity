@@ -44,8 +44,8 @@ type Config struct {
 	BigTradeUSD          float64 // Minimum to fetch from API
 	MinTradeUSD          float64 // Minimum to process and alert
 	NewWalletDaysMax     int
-	SuspicionScoreWarn   float64
-	SuspicionScoreAlert  float64
+	SuspicionScoreWarn   float64 // 0-100 scale (e.g., 70)
+	SuspicionScoreAlert  float64 // 0-100 scale (e.g., 85)
 	NetPositionWindowHrs int
 	AlertCooldownMins    int
 	TimeToCloseHoursMax  int     // Hours before market close to flag trades
@@ -100,9 +100,9 @@ func Load() (*Config, error) {
 		GammaAPIBaseURL:      getEnv("GAMMA_API_BASE_URL", "https://gamma-api.polymarket.com"),
 		BigTradeUSD:          getEnvFloat("BIG_TRADE_USD", 10000.0),
 		MinTradeUSD:          getEnvFloat("MIN_TRADE_USD", 5000.0),
-		NewWalletDaysMax:     getEnvInt("NEW_WALLET_DAYS_MAX", 30),
-		SuspicionScoreWarn:   getEnvFloat("SUSPICION_SCORE_WARN", 5000.0),
-		SuspicionScoreAlert:  getEnvFloat("SUSPICION_SCORE_ALERT", 10000.0),
+		NewWalletDaysMax:     getEnvInt("NEW_WALLET_DAYS_MAX", 1800),
+		SuspicionScoreWarn:   getEnvFloat("SUSPICION_SCORE_WARN", 70.0),
+		SuspicionScoreAlert:  getEnvFloat("SUSPICION_SCORE_ALERT", 85.0),
 		NetPositionWindowHrs: getEnvInt("NET_POSITION_WINDOW_HRS", 24),
 		AlertCooldownMins:    getEnvInt("ALERT_COOLDOWN_MINS", 60),
 		TimeToCloseHoursMax:  getEnvInt("TIME_TO_CLOSE_HOURS_MAX", 48),
@@ -115,7 +115,7 @@ func Load() (*Config, error) {
 		DataAPITradesRPS:     getEnvFloat("DATA_API_TRADES_RPS", 2.0),
 		DataAPIActivityRPS:   getEnvFloat("DATA_API_ACTIVITY_RPS", 1.0),
 		GammaAPIMarketsRPS:   getEnvFloat("GAMMA_API_MARKETS_RPS", 5.0),
-		WalletLookupWorkers:  getEnvInt("WALLET_LOOKUP_WORKERS", 5),
+		WalletLookupWorkers:  getEnvInt("WALLET_LOOKUP_WORKERS", 1),
 		PollIntervalSec:      getEnvInt("POLL_INTERVAL_SEC", 30),
 		AlertMode:            getEnv("ALERT_MODE", "log"),
 		DiscordWebURL:        secrets.GetOptionalSecret("DISCORD_WEBHOOK_URL", ""),

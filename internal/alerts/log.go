@@ -20,13 +20,14 @@ func NewLogSender(log *logrus.Logger) *LogSender {
 // Send logs the alert
 func (s *LogSender) Send(ctx context.Context, payload *AlertPayload) error {
 	fields := logrus.Fields{
-		"severity":        payload.Severity,
-		"wallet":          payload.WalletShort,
-		"market":          payload.MarketTitle,
-		"notional_usd":    payload.NotionalUSD,
-		"wallet_age_days": payload.WalletAgeDays,
-		"suspicion_score": payload.SuspicionScore,
-		"tx_hash":         payload.TxHashShort,
+		"severity":         payload.Severity,
+		"wallet":           payload.WalletShort,
+		"market":           payload.MarketTitle,
+		"notional_usd":     payload.NotionalUSD,
+		"wallet_age_days":  payload.WalletAgeDays,
+		"normalized_score": payload.NormalizedScore,
+		"raw_score":        payload.SuspicionScore,
+		"tx_hash":          payload.TxHashShort,
 	}
 	
 	if payload.ScoreBreakdown != nil {

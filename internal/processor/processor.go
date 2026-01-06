@@ -224,7 +224,7 @@ func (p *Processor) processTrade(ctx context.Context, trade *dataapi.Trade) erro
 	}
 
 	// Calculate suspicion score with time-to-close multiplier
-	score := p.calculateSuspicionScore(notional, walletAgeDays, hoursToClose)
+	rawScore := p.calculateSuspicionScore(notional, walletAgeDays, hoursToClose)
 
 	// Store trade
 	tradeRecord := &storage.TradeSeen{
@@ -431,7 +431,7 @@ func (p *Processor) processTrade(ctx context.Context, trade *dataapi.Trade) erro
 	if walletAgeDays <= p.cfg.NewWalletDaysMax {
 		// Build score breakdown for transparency
 		breakdown := &alerts.ScoreBreakdown{
-			BaseScore:                  score,
+			BaseScore:                  rawScore,
 			TimeToCloseMultiplier:      1.0,
 			WinRateMultiplier:          1.0,
 			FirstTradeLargeMultiplier:  firstTradeLargeMultiplier,
@@ -462,7 +462,7 @@ func (p *Processor) processTrade(ctx context.Context, trade *dataapi.Trade) erro
 		}
 
 		// Apply win rate multiplier to severity determination
-		adjustedScore := score
+		adjustedScore := rawScore
 		// Only apply win rate multiplier if wallet has sufficient sample size (5+ resolved trades)
 		if walletStats != nil && walletStats.TotalResolvedTrades >= 5 && winRate >= p.cfg.MinWinRateThreshold {
 			// High win rate increases suspicion
@@ -568,10 +568,14 @@ func (p *Processor) processTrade(ctx context.Context, trade *dataapi.Trade) erro
 		}
 		
 		breakdown.FinalScore = adjustedScore
+		
+		// Normalize score to 0-100 for better UX
+		normalizedScore := p.normalizeScore(adjustedScore)
+		breakdown.NormalizedScore = normalizedScore
 
-		severity := p.determineSeverity(adjustedScore)
+		severity := p.determineSeverity(normalizedScore)
 		if severity != alerts.SeverityInfo {
-			if err := p.sendAlert(ctx, trade, wallet, marketInfo, notional, walletAgeDays, adjustedScore, severity, breakdown); err != nil {
+			if err := p.sendAlert(ctx, trade, wallet, marketInfo, notional, walletAgeDays, adjustedScore, normalizedScore, severity, breakdown); err != nil {
 				p.log.WithError(err).Error("Failed to send alert")
 			}
 		}
@@ -749,6 +753,37 @@ func (p *Processor) calculateSuspicionScore(notional float64, walletAgeDays int,
 	return baseScore
 }
 
+// normalizeScore converts raw suspicion score to 0-100 scale using logarithmic normalization
+// This provides an intuitive scale where:
+// 0-40: Low suspicion (small trades, older wallets)
+// 40-70: Medium suspicion (notable patterns)
+// 70-85: High suspicion (multiple red flags)
+// 85-100: Critical (extreme insider trading signals)
+func (p *Processor) normalizeScore(rawScore float64) float64 {
+	if rawScore <= 0 {
+		return 0
+	}
+	
+	// Use logarithmic scale to handle wide range of raw scores
+	// Calibrated so typical scores map to intuitive ranges:
+	// - 100 → ~20
+	// - 1,000 → ~40
+	// - 10,000 → ~60
+	// - 50,000 → ~75
+	// - 100,000 → ~80
+	// - 500,000+ → ~90-100
+	const maxExpectedScore = 1000000.0 // 1 million raw score = 100 normalized
+	
+	normalized := (math.Log10(rawScore+1) / math.Log10(maxExpectedScore)) * 100.0
+	
+	// Cap at 100
+	if normalized > 100 {
+		return 100
+	}
+	
+	return normalized
+}
+
 // isNotInsiderCategory checks if a market category cannot involve insider trading
 // (sports, entertainment, etc.)
 func isNotInsiderCategory(market *MarketInfo) bool {
@@ -823,7 +858,8 @@ func (p *Processor) sendAlert(
 	marketInfo *MarketInfo,
 	notional float64,
 	walletAgeDays int,
-	score float64,
+	rawScore float64,
+	normalizedScore float64,
 	severity alerts.Severity,
 	breakdown *alerts.ScoreBreakdown,
 ) error {
@@ -877,7 +913,8 @@ func (p *Processor) sendAlert(
 		Price:           trade.Price,
 		WalletAgeDays:   walletAgeDays,
 		FirstSeenDate:   time.Unix(wallet.FirstSeenTS, 0).Format("2006-01-02"),
-		SuspicionScore:  score,
+		SuspicionScore:  rawScore,
+		NormalizedScore: normalizedScore,
 		ScoreBreakdown:  breakdown,
 		TransactionHash: trade.TransactionHash,
 		TxHashShort:     shortenHash(trade.TransactionHash),

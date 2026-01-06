@@ -117,7 +117,7 @@ func (s *DiscordSender) buildEmbed(payload *AlertPayload) map[string]interface{}
 		},
 		{
 			"name":   "Suspicion Score",
-			"value":  fmt.Sprintf("%.2f", payload.SuspicionScore),
+			"value":  fmt.Sprintf("**%.0f/100**", payload.NormalizedScore),
 			"inline": true,
 		},
 		{
@@ -158,10 +158,7 @@ func (s *DiscordSender) buildEmbed(payload *AlertPayload) map[string]interface{}
 func (s *DiscordSender) formatScoreBreakdown(b *ScoreBreakdown) string {
 	var parts []string
 	
-	parts = append(parts, fmt.Sprintf("Base Score: **%.0f**", b.BaseScore))
-	
-	if b.TimeToCloseMultiplier > 1.0 {
-		parts = append(parts, fmt.Sprintf("⏰ Time to close (%.1fh): **%.2fx**", b.HoursToClose, b.TimeToCloseMultiplier))
+	parts = append(parts, fmt.Sprintf("Base: %.0f", b.BaseScore))
 	}
 	if b.WinRateMultiplier > 1.0 {
 		parts = append(parts, fmt.Sprintf("🎯 Win rate (%.0f%%, %d trades): **%.2fx**", b.WinRate*100, b.ResolvedTrades, b.WinRateMultiplier))
@@ -195,7 +192,7 @@ func (s *DiscordSender) formatScoreBreakdown(b *ScoreBreakdown) string {
 	}
 	
 	if len(parts) > 1 {
-		parts = append(parts, fmt.Sprintf("\n**Final Score: %.0f**", b.FinalScore))
+		parts = append(parts, fmt.Sprintf("\n🎯 Normalized: **%.0f/100** (raw: %.0f)", b.NormalizedScore, b.FinalScore))
 	}
 	
 	return fmt.Sprintf("```\n%s\n```", truncate(joinParts(parts), 1000))
