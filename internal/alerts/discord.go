@@ -156,42 +156,43 @@ func (s *DiscordSender) buildEmbed(payload *AlertPayload) map[string]interface{}
 func (s *DiscordSender) formatScoreBreakdown(b *ScoreBreakdown) string {
 	var parts []string
 	
-	parts = append(parts, fmt.Sprintf("Base: %.0f", b.BaseScore))	
+	parts = append(parts, fmt.Sprintf("Base Score: %.0f", b.BaseScore))	
 	if b.TimeToCloseMultiplier > 1.0 {
-		parts = append(parts, fmt.Sprintf("⏰ Time to close (%.1fh): **%.2fx**", b.HoursToClose, b.TimeToCloseMultiplier))	}
+		parts = append(parts, fmt.Sprintf("⏰ Market closes soon (%.1fh) - timing matters: **%.2fx**", b.HoursToClose, b.TimeToCloseMultiplier))
+	}
 	if b.WinRateMultiplier > 1.0 {
-		parts = append(parts, fmt.Sprintf("🎯 Win rate (%.0f%%, %d trades): **%.2fx**", b.WinRate*100, b.ResolvedTrades, b.WinRateMultiplier))
+		parts = append(parts, fmt.Sprintf("🎯 Proven track record (%.0f%% wins, %d trades): **%.2fx**", b.WinRate*100, b.ResolvedTrades, b.WinRateMultiplier))
 	}
 	if b.FirstTradeLargeMultiplier > 1.0 {
-		parts = append(parts, fmt.Sprintf("🆕 First large trade: **%.1fx**", b.FirstTradeLargeMultiplier))
+		parts = append(parts, fmt.Sprintf("🆕 First trade is a big one - unusual confidence: **%.1fx**", b.FirstTradeLargeMultiplier))
 	}
 	if b.FlashFundingMultiplier > 1.0 {
-		parts = append(parts, fmt.Sprintf("⚡ Flash funding (%.1fm): **%.1fx**", b.FundingAgeHours*60, b.FlashFundingMultiplier))
+		parts = append(parts, fmt.Sprintf("⚡ Wallet funded & traded immediately (%.1fm ago): **%.1fx**", b.FundingAgeHours*60, b.FlashFundingMultiplier))
 	}
 	if b.LiquidityMultiplier > 1.0 {
-		parts = append(parts, fmt.Sprintf("💧 Liquidity ratio (%.1f%%): **%.2fx**", b.LiquidityRatio*100, b.LiquidityMultiplier))
+		parts = append(parts, fmt.Sprintf("💧 Large bet vs available liquidity (%.1f%%): **%.2fx**", b.LiquidityRatio*100, b.LiquidityMultiplier))
 	}
 	if b.PriceConfidenceMultiplier > 1.0 {
-		parts = append(parts, fmt.Sprintf("💪 Extreme price: **%.1fx**", b.PriceConfidenceMultiplier))
+		parts = append(parts, fmt.Sprintf("💪 Betting on extreme odds - high conviction: **%.1fx**", b.PriceConfidenceMultiplier))
 	}
 	if b.ConcentrationMultiplier > 1.0 {
-		parts = append(parts, fmt.Sprintf("📈 One-sided (%.0f%%): **%.1fx**", b.NetConcentration*100, b.ConcentrationMultiplier))
+		parts = append(parts, fmt.Sprintf("📈 Heavily one-sided betting (%.0f%% concentration): **%.1fx**", b.NetConcentration*100, b.ConcentrationMultiplier))
 	}
 	if b.VelocityMultiplier > 1.0 {
-		parts = append(parts, fmt.Sprintf("🚀 Velocity (%d trades): **%.1fx**", b.VelocityCount, b.VelocityMultiplier))
+		parts = append(parts, fmt.Sprintf("🚀 Rapid-fire trading (%d trades in short time): **%.1fx**", b.VelocityCount, b.VelocityMultiplier))
 	}
 	if b.ClusterMultiplier > 1.0 {
-		parts = append(parts, fmt.Sprintf("👥 Cluster: **%.1fx**", b.ClusterMultiplier))
+		parts = append(parts, fmt.Sprintf("👥 Part of connected wallet group: **%.1fx**", b.ClusterMultiplier))
 	}
 	if b.CoordinatedMultiplier > 1.0 {
-		parts = append(parts, fmt.Sprintf("🤝 Coordinated: **%.1fx**", b.CoordinatedMultiplier))
+		parts = append(parts, fmt.Sprintf("🤝 Coordinated activity with other wallets: **%.1fx**", b.CoordinatedMultiplier))
 	}
 	if b.FundingAgeMultiplier > 1.0 {
-		parts = append(parts, fmt.Sprintf("⏱️ Fast funding (%.1fh): **%.2fx**", b.FundingAgeHours, b.FundingAgeMultiplier))
+		parts = append(parts, fmt.Sprintf("⏱️ Very new wallet (funded %.1fh ago): **%.2fx**", b.FundingAgeHours, b.FundingAgeMultiplier))
 	}
 	
 	if len(parts) > 1 {
-		parts = append(parts, fmt.Sprintf("\n🎯 Normalized: **%.0f/100** (raw: %.0f)", b.NormalizedScore, b.FinalScore))
+		parts = append(parts, fmt.Sprintf("\n🎯 Final Suspicion Score: **%.0f/100** (raw: %.0f)", b.NormalizedScore, b.FinalScore))
 	}
 	
 	return fmt.Sprintf("```\n%s\n```", truncate(joinParts(parts), 1000))
