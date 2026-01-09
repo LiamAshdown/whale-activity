@@ -576,11 +576,11 @@ func (p *Processor) processTrade(ctx context.Context, trade *dataapi.Trade) erro
 		metrics.RecordSuspicionScore(adjustedScore, normalizedScore)
 
 		severity := p.determineSeverity(normalizedScore)
-		if severity != alerts.SeverityInfo {
+		// if severity != alerts.SeverityInfo {
 			if err := p.sendAlert(ctx, trade, wallet, marketInfo, notional, walletAgeDays, adjustedScore, normalizedScore, severity, breakdown); err != nil {
 				p.log.WithError(err).Error("Failed to send alert")
 			}
-		}
+		// }
 	// }
 
 	return nil
